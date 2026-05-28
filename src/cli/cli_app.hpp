@@ -4,7 +4,16 @@
 
 namespace wmr {
 
+enum class CliMode {
+    AutoRemove,
+    Detect,
+    VisibleOnly,
+    SynthidOnly,
+    BuildCodebook,
+};
+
 struct CliOptions {
+    CliMode mode = CliMode::AutoRemove;
     std::string input_path;
     std::string output_path;
     bool force = false;
@@ -16,6 +25,7 @@ struct CliOptions {
     bool synthid = false;
     std::string codebook_path;
     float synthid_strength = 1.0f;
+    bool recursive = false;
 };
 
 int run_cli(int argc, char* argv[]);

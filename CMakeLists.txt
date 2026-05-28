@@ -17,6 +17,7 @@ set(SOURCES
     src/synthid/codebook_subtractor.cpp
     src/synthid/codebook_builder.cpp
     src/cli/cli_app.cpp
+    src/cli/batch_processor.cpp
 )
 
 # Executable
