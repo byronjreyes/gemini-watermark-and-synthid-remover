@@ -22,6 +22,16 @@ struct ProcessResult {
     std::string message;
 };
 
+struct DetectionResult {
+    bool detected = false;
+    float confidence = 0.0f;
+    cv::Rect region;
+    WatermarkSize size = WatermarkSize::Small;
+    float spatial_score = 0.0f;
+    float gradient_score = 0.0f;
+    float variance_score = 0.0f;
+};
+
 inline WatermarkSize get_watermark_size(int width, int height) {
     return (width > 1024 && height > 1024) ? WatermarkSize::Large : WatermarkSize::Small;
 }
