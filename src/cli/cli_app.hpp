@@ -24,7 +24,7 @@ struct CliOptions {
     float inpaint_strength = 0.85f;
     bool synthid = false;
     std::string codebook_path;
-    float synthid_strength = 1.0f;
+    float synthid_strength = 0.50f;
     bool recursive = false;
     bool codebook_free = false;
     bool phase_adaptive = false;

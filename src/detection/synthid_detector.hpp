@@ -24,7 +24,7 @@ public:
     SynthidDetectionResult detect(const cv::Mat& image,
                                   const SpectralCodebook& codebook) const;
 
-    static constexpr float kDefaultThreshold = 0.50f;
+    static constexpr float kDefaultThreshold = 0.55f;
 
 private:
     FftContext& fft_;

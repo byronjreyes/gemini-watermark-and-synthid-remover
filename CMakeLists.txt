@@ -50,8 +50,10 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     fmt::fmt
     CLI11::CLI11
     spdlog::spdlog
-    FFTW3::fftw3f
+    ${FFTW3f_LIBRARIES}
 )
+target_include_directories(${PROJECT_NAME} PRIVATE ${FFTW3f_INCLUDE_DIRS})
+target_link_directories(${PROJECT_NAME} PRIVATE ${FFTW3f_LIBRARY_DIRS})
 
 # Platform-specific flags
 if(APPLE)

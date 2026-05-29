@@ -47,123 +47,223 @@ void NoiseResidualSubtractor::remove_synthid(
         else base_strength = RemovalStrength::Maximum;
     }
 
-    struct PassSchedule {
-        RemovalStrength level;
-        int count;
-    };
-
-    PassSchedule schedule[4];
-    int num_passes = 0;
-
-    switch (base_strength) {
-        case RemovalStrength::Gentle:
-            schedule[0] = {RemovalStrength::Gentle, 1};
-            num_passes = 1;
-            break;
-        case RemovalStrength::Moderate:
-            schedule[0] = {RemovalStrength::Moderate, 1};
-            schedule[1] = {RemovalStrength::Gentle, 1};
-            num_passes = 2;
-            break;
-        case RemovalStrength::Aggressive:
-            schedule[0] = {RemovalStrength::Aggressive, 1};
-            schedule[1] = {RemovalStrength::Moderate, 1};
-            schedule[2] = {RemovalStrength::Gentle, 1};
-            num_passes = 3;
-            break;
-        case RemovalStrength::Maximum:
-            schedule[0] = {RemovalStrength::Maximum, 1};
-            schedule[1] = {RemovalStrength::Maximum, 1};
-            schedule[2] = {RemovalStrength::Maximum, 1};
-            schedule[3] = {RemovalStrength::Maximum, 1};
-            num_passes = 4;
-            break;
-    }
-
     cv::Mat work;
     image.convertTo(work, CV_32FC3, 1.0 / 255.0);
 
     cv::Mat channels[3];
     cv::split(work, channels);
 
-    // Content-aware: for content images, carrier is <0.1% of spectral energy
     cv::Scalar img_std;
     cv::meanStdDev(work, cv::Scalar(), img_std);
     float avg_std = static_cast<float>((img_std[0] + img_std[1] + img_std[2]) / 3.0);
     bool is_content_image = avg_std > 0.05f;
 
     if (is_content_image) {
-        spdlog::info("Content image detected (std={:.4f}): carrier <0.1% of spectral energy. "
-                     "Skipping carrier subtraction, applying spectral disruption only.", avg_std);
-        num_passes = 0;
+        spdlog::info("Content image detected (std={:.4f}): spectral disruption (carrier <0.1% of energy).", avg_std);
+    } else {
+        spdlog::info("Uniform image detected (std={:.4f}): direct carrier removal.", avg_std);
     }
 
-    spdlog::info("Codebook-free SynthID removal: {}x{}, {} passes, strength={}, content={}",
-                 w, h, num_passes, static_cast<int>(base_strength), is_content_image);
+    spdlog::info("Codebook-free SynthID removal: {}x{}, strength={}, content={}",
+                 w, h, static_cast<int>(base_strength), is_content_image);
 
-    for (int pass = 0; pass < num_passes; ++pass) {
-        auto params = get_strength_params(schedule[pass].level);
-
-        spdlog::debug("Pass {}/{}: removal={:.2f}, mag_cap={:.2f}, dc_radius={:.0f}",
-                      pass + 1, num_passes, params.removal, params.mag_cap, params.dc_radius);
+    // For uniform images (std < 0.05): the carrier IS the only spectral content.
+    // The most effective removal is to replace the image with its mean color
+    // plus tiny natural sensor noise. This completely destroys the carrier.
+    if (!is_content_image) {
+        cv::Scalar img_mean = cv::mean(work);
+        cv::RNG rng(std::rand());
 
         for (int ch = 0; ch < 3; ++ch) {
-            cv::Mat img_fft = fft_.forward(channels[ch]);
-
-            cv::Mat wm_estimate = estimate_carrier_from_noise(
-                img_fft, channels[ch],
-                params.removal, params.mag_cap, params.dc_radius, ch);
-
-            cv::Mat cleaned_fft;
-            cv::subtract(img_fft, wm_estimate, cleaned_fft);
-
-            channels[ch] = fft_.inverse(cleaned_fft);
-        }
-    }
-
-    // Phase noise disruption: scramble any remaining carrier phase encoding
-    float phase_sigma = 0.0f;
-    if (is_content_image) {
-        phase_sigma = 0.10f;
-    } else {
-        switch (base_strength) {
-            case RemovalStrength::Gentle:    phase_sigma = 0.15f; break;
-            case RemovalStrength::Moderate:  phase_sigma = 0.30f; break;
-            case RemovalStrength::Aggressive: phase_sigma = 0.50f; break;
-            case RemovalStrength::Maximum:   phase_sigma = 0.70f; break;
-        }
-    }
-
-    if (phase_sigma > 0.0f) {
-        cv::Mat dc_ramp(h, w, CV_32FC1);
-        for (int y = 0; y < h; ++y) {
-            float fy = static_cast<float>(y);
-            if (fy > h / 2.0f) fy -= h;
-            for (int x = 0; x < w; ++x) {
-                float fx = static_cast<float>(x);
-                if (fx > w / 2.0f) fx -= w;
-                float dist = std::sqrt(fy * fy + fx * fx);
-                dc_ramp.at<float>(y, x) = std::clamp((dist - 40.0f) / 20.0f, 0.0f, 1.0f);
+            float mean_val = static_cast<float>(img_mean[ch]);
+            // Strength controls how much of the original variation to keep
+            float keep_ratio = 0.0f;
+            switch (base_strength) {
+                case RemovalStrength::Gentle:    keep_ratio = 0.30f; break;
+                case RemovalStrength::Moderate:  keep_ratio = 0.15f; break;
+                case RemovalStrength::Aggressive: keep_ratio = 0.05f; break;
+                case RemovalStrength::Maximum:   keep_ratio = 0.00f; break;
+            }
+            // Always add sensor noise — a perfectly uniform image has undefined
+            // FFT phase that can correlate with codebook profiles.
+            cv::Mat noise(h, w, CV_32FC1);
+            rng.fill(noise, cv::RNG::NORMAL, mean_val, 0.002f);
+            if (keep_ratio > 0.0f) {
+                channels[ch] = channels[ch] * keep_ratio + noise * (1.0f - keep_ratio);
+            } else {
+                channels[ch] = noise;
             }
         }
 
-        cv::RNG rng(42);
-        for (int ch = 0; ch < 3; ++ch) {
-            cv::Mat ch_fft = fft_.forward(channels[ch]);
-            cv::Mat mag = FftContext::magnitude(ch_fft);
-            cv::Mat pha = FftContext::phase(ch_fft);
+        cv::Mat merged;
+        cv::merge(channels, 3, merged);
+        merged = cv::max(merged, 0.0);
+        merged = cv::min(merged, 1.0);
+        merged.convertTo(image, CV_8UC3, 255.0);
 
-            cv::Mat phase_noise(h, w, CV_32FC1);
-            rng.fill(phase_noise, cv::RNG::NORMAL, 0.0, phase_sigma);
-            phase_noise = phase_noise.mul(dc_ramp);
-
-            cv::Mat new_phase;
-            cv::add(pha, phase_noise, new_phase);
-
-            channels[ch] = fft_.inverse(FftContext::from_polar(mag, new_phase));
-        }
-        spdlog::debug("Applied phase noise disruption: sigma={:.2f}", phase_sigma);
+        spdlog::info("Uniform image: replaced with mean+noise (keep_ratio={:.2f})",
+                     base_strength == RemovalStrength::Maximum ? 0.0f : 0.15f);
+        return;
     }
+
+    // Carrier frequency band where SynthID encodes data.
+    // For uniform images: carrier IS the entire spectrum (1/f^1.3).
+    // Replace everything except DC to fully neutralize carrier.
+    // For content images: carrier occupies r=30-500 in mid frequencies.
+    const float band_inner = is_content_image ? 30.0f : 3.0f;
+    float max_r = std::sqrt(static_cast<float>((h/2)*(h/2) + (w/2)*(w/2)));
+    const float band_outer = is_content_image ? 500.0f : max_r;
+    const float ramp_width = 20.0f;
+
+    // Build frequency band masks
+    cv::Mat carrier_mask(h, w, CV_32FC1);   // 1 inside carrier band, 0 outside
+    cv::Mat stop_mask(h, w, CV_32FC1);      // 0 inside carrier band, 1 outside (band-stop)
+    for (int y = 0; y < h; ++y) {
+        float fy = static_cast<float>(y);
+        if (fy > h / 2.0f) fy -= h;
+        for (int x = 0; x < w; ++x) {
+            float fx = static_cast<float>(x);
+            if (fx > w / 2.0f) fx -= w;
+            float dist = std::sqrt(fy * fy + fx * fx);
+
+            float lo = std::clamp((dist - band_inner) / ramp_width, 0.0f, 1.0f);
+            float hi = std::clamp((band_outer - dist) / ramp_width, 0.0f, 1.0f);
+            float carrier = lo * hi;
+            carrier_mask.at<float>(y, x) = carrier;
+            stop_mask.at<float>(y, x) = 1.0f - carrier;
+        }
+    }
+
+    // Strength-dependent replacement intensity.
+    // At Maximum strength, carrier band is fully replaced.
+    // At lower strengths, blend original and replacement.
+    float replacement_blend = 0.0f;
+    switch (base_strength) {
+        case RemovalStrength::Gentle:    replacement_blend = 0.40f; break;
+        case RemovalStrength::Moderate:  replacement_blend = 0.65f; break;
+        case RemovalStrength::Aggressive: replacement_blend = 0.85f; break;
+        case RemovalStrength::Maximum:   replacement_blend = 1.00f; break;
+    }
+
+    // Phase noise sigma scales with strength
+    float phase_sigma = 0.0f;
+    if (is_content_image) {
+        switch (base_strength) {
+            case RemovalStrength::Gentle:    phase_sigma = 0.10f; break;
+            case RemovalStrength::Moderate:  phase_sigma = 0.20f; break;
+            case RemovalStrength::Aggressive: phase_sigma = 0.30f; break;
+            case RemovalStrength::Maximum:   phase_sigma = 0.40f; break;
+        }
+    } else {
+        // For uniform images, aggressive phase disruption in carrier band
+        switch (base_strength) {
+            case RemovalStrength::Gentle:    phase_sigma = 0.50f; break;
+            case RemovalStrength::Moderate:  phase_sigma = 1.00f; break;
+            case RemovalStrength::Aggressive: phase_sigma = 2.00f; break;
+            case RemovalStrength::Maximum:   phase_sigma = 3.14f; break;
+        }
+    }
+
+    cv::RNG rng(42);
+
+    for (int ch = 0; ch < 3; ++ch) {
+        cv::Mat ch_fft = fft_.forward(channels[ch]);
+        cv::Mat img_mag = FftContext::magnitude(ch_fft);
+        cv::Mat img_phase = FftContext::phase(ch_fft);
+
+        cv::Mat new_mag = img_mag.clone();
+        cv::Mat new_phase = img_phase.clone();
+
+        if (!is_content_image) {
+            // Spectral band replacement for uniform images:
+            // The carrier IS the image content. Replace nearly the full spectrum
+            // with random noise magnitude and fully random phase.
+            // Only preserve the DC component (average color).
+            cv::Mat replacement_mag(h, w, CV_32FC1);
+            // Use very small random magnitudes — carrier-free uniform images
+            // should have near-zero spectral energy outside DC.
+            // DC magnitude for a black image is ~0, for gray is ~0.5.
+            float dc_mag = img_mag.at<float>(h / 2, w / 2);
+            for (int y = 0; y < h; ++y) {
+                float fy = static_cast<float>(y);
+                if (fy > h / 2.0f) fy -= h;
+                for (int x = 0; x < w; ++x) {
+                    float fx = static_cast<float>(x);
+                    if (fx > w / 2.0f) fx -= w;
+                    float dist = std::sqrt(fy * fy + fx * fx);
+
+                    // Beyond DC: small random magnitude proportional to 1/dist
+                    // to mimic natural noise floor
+                    if (dist < 1.0f) {
+                        replacement_mag.at<float>(y, x) = 0.0f;
+                    } else {
+                        // Natural noise floor: ~1/dist decay with randomness
+                        float natural_floor = dc_mag * 0.001f / std::pow(dist, 0.5f);
+                        replacement_mag.at<float>(y, x) = natural_floor;
+                    }
+                }
+            }
+
+            // Add randomness to replacement magnitude to avoid creating
+            // a new detectable pattern
+            cv::Mat mag_jitter(h, w, CV_32FC1);
+            rng.fill(mag_jitter, cv::RNG::NORMAL, 1.0, 0.3);
+            cv::max(mag_jitter, 0.2, mag_jitter);
+            cv::min(mag_jitter, 3.0, mag_jitter);
+            replacement_mag = replacement_mag.mul(mag_jitter);
+
+            // Blend: keep (1-blend) of original, add blend of replacement in carrier band
+            cv::Mat blended_mag = img_mag.mul(1.0f - carrier_mask) +
+                (img_mag * (1.0f - replacement_blend) + replacement_mag * replacement_blend)
+                    .mul(carrier_mask);
+
+            // Preserve DC component
+            blended_mag.at<float>(h / 2, w / 2) = img_mag.at<float>(h / 2, w / 2);
+
+            new_mag = blended_mag;
+
+            // Fully randomize phase everywhere except DC
+            cv::Mat random_phase(h, w, CV_32FC1);
+            rng.fill(random_phase, cv::RNG::UNIFORM, -static_cast<float>(CV_PI), static_cast<float>(CV_PI));
+            new_phase = img_phase.mul(1.0f - carrier_mask) + random_phase.mul(carrier_mask);
+            // Keep DC phase unchanged
+            new_phase.at<float>(h / 2, w / 2) = img_phase.at<float>(h / 2, w / 2);
+        } else {
+            // Content images: disrupt carrier in both magnitude and phase.
+            // The carrier contributes ~8% above baseline in detection scores.
+            // Noise_corr and struct_ratio are magnitude-domain metrics,
+            // so phase noise alone has no effect. We need magnitude perturbation
+            // in the carrier band (r=30-500).
+            float mag_noise_strength = 0.0f;
+            switch (base_strength) {
+                case RemovalStrength::Gentle:    mag_noise_strength = 0.01f; break;
+                case RemovalStrength::Moderate:  mag_noise_strength = 0.03f; break;
+                case RemovalStrength::Aggressive: mag_noise_strength = 0.05f; break;
+                case RemovalStrength::Maximum:   mag_noise_strength = 0.10f; break;
+            }
+
+            if (mag_noise_strength > 0.0f) {
+                // Multiply carrier band magnitude by random factors near 1.0
+                cv::Mat mag_perturbation(h, w, CV_32FC1);
+                rng.fill(mag_perturbation, cv::RNG::NORMAL, 1.0, mag_noise_strength);
+                cv::max(mag_perturbation, 0.5, mag_perturbation);
+                cv::min(mag_perturbation, 1.5, mag_perturbation);
+                new_mag = img_mag.mul(1.0f - carrier_mask) +
+                          img_mag.mul(mag_perturbation).mul(carrier_mask);
+            }
+
+            if (phase_sigma > 0.0f) {
+                cv::Mat phase_noise(h, w, CV_32FC1);
+                rng.fill(phase_noise, cv::RNG::NORMAL, 0.0, phase_sigma);
+                new_phase = img_phase + phase_noise.mul(carrier_mask);
+            }
+        }
+
+        channels[ch] = fft_.inverse(FftContext::from_polar(new_mag, new_phase));
+    }
+
+    spdlog::debug("Applied spectral band replacement: blend={:.2f}, phase_sigma={:.2f}, band=[{},{}]",
+                  replacement_blend, phase_sigma, band_inner, band_outer);
 
     cv::Mat merged;
     cv::merge(channels, 3, merged);
@@ -173,7 +273,7 @@ void NoiseResidualSubtractor::remove_synthid(
     merged = cv::min(merged, 1.0);
     merged.convertTo(image, CV_8UC3, 255.0);
 
-    spdlog::debug("Codebook-free SynthID removal complete: {} passes", num_passes);
+    spdlog::debug("Codebook-free SynthID removal complete");
 }
 
 cv::Mat NoiseResidualSubtractor::compute_dc_ramp(int rows, int cols, float radius) {

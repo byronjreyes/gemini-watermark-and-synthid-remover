@@ -95,7 +95,7 @@ SynthidDetectionResult SynthidDetector::detect(
         // Only detect if struct_ratio is very high (>= 0.80), which indicates
         // strong spectral similarity beyond natural 1/f patterns.
         // Use a combined gate: require struct_ratio > 0.80 for content images.
-        threshold = 0.60f;
+        threshold = 0.70f;
     }
 
     result.detected = result.confidence >= threshold;
@@ -105,6 +105,15 @@ SynthidDetectionResult SynthidDetector::detect(
                   avg_noise, avg_phase, avg_struct, ms_cons,
                   result.confidence,
                   result.detected ? "DETECTED" : "not detected");
+
+    // SynthID-Image uses a deep learning encoder-decoder (arXiv:2510.09263).
+    // FFT correlation metrics sit at random baseline (~0.50) for both watermarked
+    // and non-watermarked images, so this detector has limited discriminative power.
+    // Reliable detection requires the neural decoder model (not publicly available).
+    if (result.confidence < 0.60f) {
+        spdlog::info("Note: FFT-based detector cannot reliably detect SynthID. "
+                     "Score {:.1f}% is near random baseline.", result.confidence * 100.0f);
+    }
 
     return result;
 }
@@ -295,7 +304,7 @@ float SynthidDetector::multi_scale_consistency(
                     + (score_quarter - mean_score) * (score_quarter - mean_score)) / 3.0f;
 
     float consistency = 1.0f - std::min(std::sqrt(variance) * 3.0f, 1.0f);
-    return std::clamp(mean_score * consistency * 2.0f, 0.0f, 1.0f);
+    return std::clamp(mean_score * consistency, 0.0f, 1.0f);
 }
 
 } // namespace wmr

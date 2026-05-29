@@ -190,11 +190,17 @@ void CodebookSubtractor::remove_synthid(
     // Phase noise disruption: scramble any remaining carrier phase encoding.
     // SynthID encodes data in both magnitude and phase; this step disrupts
     // the phase component after magnitude subtraction is complete.
+    // SynthID data is encoded in phase at r=30-400 (mid frequencies).
+    // For content images: band-limited to r=30-500 with moderate sigma.
+    // For uniform images: full spectrum noise (carrier is everywhere).
     float phase_sigma = 0.0f;
     if (is_content_image) {
-        // For content images, subtle phase noise is sufficient to disrupt
-        // carrier encoding while preserving image quality (PSNR > 40 dB).
-        phase_sigma = 0.10f;
+        switch (base_strength) {
+            case RemovalStrength::Gentle:    phase_sigma = 0.10f; break;
+            case RemovalStrength::Moderate:  phase_sigma = 0.20f; break;
+            case RemovalStrength::Aggressive: phase_sigma = 0.30f; break;
+            case RemovalStrength::Maximum:   phase_sigma = 0.40f; break;
+        }
     } else {
         switch (base_strength) {
             case RemovalStrength::Gentle:    phase_sigma = 0.15f; break;
@@ -205,8 +211,13 @@ void CodebookSubtractor::remove_synthid(
     }
 
     if (phase_sigma > 0.0f) {
-        // DC exclusion ramp — don't perturb low frequencies (structural info)
-        cv::Mat dc_ramp(h, w, CV_32FC1);
+        // Band-pass frequency window for phase noise
+        cv::Mat freq_window(h, w, CV_32FC1);
+        int max_r = std::min(h, w) / 2;
+        float band_inner = 30.0f;
+        float band_outer = is_content_image ? 500.0f : static_cast<float>(max_r);
+        float ramp_width = 15.0f;
+
         for (int y = 0; y < h; ++y) {
             float fy = static_cast<float>(y);
             if (fy > h / 2.0f) fy -= h;
@@ -214,7 +225,10 @@ void CodebookSubtractor::remove_synthid(
                 float fx = static_cast<float>(x);
                 if (fx > w / 2.0f) fx -= w;
                 float dist = std::sqrt(fy * fy + fx * fx);
-                dc_ramp.at<float>(y, x) = std::clamp((dist - 40.0f) / 20.0f, 0.0f, 1.0f);
+
+                float lo = std::clamp((dist - band_inner) / ramp_width, 0.0f, 1.0f);
+                float hi = std::clamp((band_outer - dist) / ramp_width, 0.0f, 1.0f);
+                freq_window.at<float>(y, x) = lo * hi;
             }
         }
 
@@ -226,7 +240,7 @@ void CodebookSubtractor::remove_synthid(
 
             cv::Mat phase_noise(h, w, CV_32FC1);
             rng.fill(phase_noise, cv::RNG::NORMAL, 0.0, phase_sigma);
-            phase_noise = phase_noise.mul(dc_ramp);
+            phase_noise = phase_noise.mul(freq_window);
 
             cv::Mat new_phase;
             cv::add(pha, phase_noise, new_phase);

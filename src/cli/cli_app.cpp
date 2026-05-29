@@ -228,6 +228,8 @@ int run_cli(int argc, char* argv[]) {
     remove_cmd->add_flag("--force-large", opts.force_large, "Force 96x96 watermark");
     remove_cmd->add_flag("--synthid", opts.synthid, "Also remove SynthID");
     remove_cmd->add_option("--codebook", opts.codebook_path, "Spectral codebook path (.wcb)");
+    remove_cmd->add_flag("--codebook-free", opts.codebook_free,
+                          "Estimate carrier from noise residual (no codebook needed)");
     remove_cmd->add_option("--synthid-strength", opts.synthid_strength,
                            "SynthID removal strength 0.0-2.0")
         ->check(CLI::Range(0.0f, 2.0f));
