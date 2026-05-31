@@ -33,6 +33,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - CMake links FFmpeg via imported targets (`FFMPEG::avformat` etc.) instead of variable-based linking
 - `vcpkg.json` version bumped to 0.2.0
 - Project version bumped to 0.2.0
+- Single-image subcommands (`visible`, `synthid`, `remove`) now require `-o` explicitly — no default overwrite
+- Batch processing defaults to `cleaned/` subdirectory instead of modifying originals
+- Purged large codebook files (>100MB) from git history, excluded via `.gitignore`
+- `.gitignore` updated to exclude HF datasets, generated codebooks, temp analysis outputs
 
 ### Phase 5: Unified CLI + Test Suite — COMPLETE
 
