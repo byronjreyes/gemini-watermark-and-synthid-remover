@@ -28,15 +28,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: lukka/run-vcpkg@v11
-        with:
-          runVcpkgInstall: true
-
       - name: Install Linux system deps
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config nasm yasm
+
+      - uses: lukka/run-vcpkg@v11
+        with:
+          runVcpkgInstall: true
 
       - name: Configure (Unix)
         if: runner.os != 'Windows'
