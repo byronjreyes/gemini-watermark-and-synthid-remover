@@ -85,6 +85,13 @@ if(APPLE)
     )
 endif()
 
+# Windows system libraries required by FFmpeg
+if(WIN32)
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        ws2_32 crypt32 bcrypt secur32 mfplat mfuuid strmiids
+    )
+endif()
+
 # x264 is a transitive dependency of FFmpeg's libx264 codec (static linking)
 find_library(X264_LIBRARY NAMES x264 PATHS ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib NO_DEFAULT_PATH)
 if(NOT X264_LIBRARY)
