@@ -65,14 +65,21 @@ Both operate in the frequency domain via `FftContext` (FFTW3 wrapper with plan c
 - Audio passthrough via fresh input context with timestamp rescaling
 - Audio streams created before MP4 header write (valid moov atom)
 
-### Scene Detection (opt-in via `--scenes`)
+### Scene Detection and Splitting (opt-in via `--scenes`)
 
-`SceneDetector` (video/scene_detector) — Bhattacharyya histogram distance:
+`SceneDetector` (video/scene_detector) — combined BGR Bhattacharyya + MAD:
 
-- Two-pass: Pass 1 scans for scene boundaries + per-scene watermark detection; Pass 2 processes frames
-- SceneDetector owns its own VideoReader (main reader stays pristine)
-- Per-scene: only watermarked scenes get removal; non-watermarked scenes pass through unchanged
-- `detect_in_shot()` extended with optional `range_start`/`range_end`/`max_samples` params
+- Per-channel BGR histogram distance (max across channels) + mean absolute pixel difference
+- Combined metric: `max(per_channel_bhatt, mad)` — catches chromatic and structural scene changes
+- Default threshold 0.30, minimum scene length 15 frames
+- Scans for scene boundaries, splits video into separate MP4 files at cuts
+- `SceneInfo` contains only `start_frame`/`end_frame` (half-open interval)
+- Single full-video watermark detection via `detect_in_shot()` (default params), applied uniformly across all split files
+- `VideoWriter::copy_audio_range(start_sec, end_sec)` — seek-based audio copy with PTS offset subtraction
+- Reader reads sequentially across scenes (no seeking within the loop)
+- Each output file: I-frame at start, trimmed audio, correct container duration
+- `-o` specifies output directory (defaults to `<input>_scenes/`); rejects file paths
+- Output naming: `<stem>_<NNN>.mp4` with dynamic zero-padding
 
 ### CLI
 

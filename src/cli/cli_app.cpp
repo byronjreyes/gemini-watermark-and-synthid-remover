@@ -18,7 +18,7 @@
 #include <iostream>
 
 #ifndef APP_VERSION
-#define APP_VERSION "0.2.0"
+#define APP_VERSION "1.1.0"
 #endif
 
 #ifndef APP_NAME
@@ -250,11 +250,25 @@ static int process_video(const CliOptions& opts) {
     encode.crf = opts.video_crf;
     encode.preset = opts.video_preset;
 
-    // Default output path: <input>_clean.mp4
+    // Resolve output path (file or directory depending on --scenes)
     std::string output = opts.output_path;
-    if (output.empty()) {
-        std::filesystem::path p(opts.input_path);
-        output = (p.parent_path() / (p.stem().string() + "_clean" + p.extension().string())).string();
+    if (config.scenes) {
+        if (!output.empty()) {
+            std::filesystem::path p(output);
+            if (std::filesystem::exists(p) && std::filesystem::is_regular_file(p)) {
+                spdlog::error("--scenes requires a directory output, not a file. Got: {}", output);
+                return 1;
+            }
+        } else {
+            std::filesystem::path p(opts.input_path);
+            output = (p.parent_path() / (p.stem().string() + "_scenes")).string();
+        }
+        std::filesystem::create_directories(output);
+    } else {
+        if (output.empty()) {
+            std::filesystem::path p(opts.input_path);
+            output = (p.parent_path() / (p.stem().string() + "_clean" + p.extension().string())).string();
+        }
     }
 
     VideoProcessor processor;
@@ -371,7 +385,7 @@ int run_cli(int argc, char* argv[]) {
     video_cmd->add_flag("--scenes", opts.scenes,
                          "Enable scene detection for multi-scene videos");
     video_cmd->add_option("--scene-threshold", opts.scene_threshold,
-                           "Scene cut sensitivity 0.0-1.0 (default: 0.4)")
+                           "Scene cut sensitivity 0.0-1.0 (default: 0.3)")
         ->check(CLI::Range(0.0, 1.0));
     video_cmd->add_option("--inpaint-strength", opts.inpaint_strength,
                            "Inpaint strength 0.0-1.0")

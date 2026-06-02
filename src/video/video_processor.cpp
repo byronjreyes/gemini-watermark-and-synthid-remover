@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <filesystem>
 #include <vector>
 
 #include <spdlog/spdlog.h>
@@ -334,179 +335,147 @@ VideoResult VideoProcessor::process(const std::string& input_path,
     ShotDetection shot;
 
     if (config.scenes) {
-        // ---- Scene-aware two-pass processing ----
+        // ---- Scene splitting: detect boundaries, split into separate files ----
 
-        // Pass 1: Detect scene boundaries using a separate reader
+        // Detect scene boundaries using SceneDetector's own reader
         spdlog::info("Scanning for scene boundaries...");
         SceneDetector detector({config.scene_threshold});
         auto scenes = detector.detect_boundaries(input_path);
 
-        // Fallback if detection returned nothing
         if (scenes.empty()) {
-            spdlog::warn("Scene detection returned no results, falling back to single-shot");
-            shot = detect_in_shot(reader, engine, config);
-            reader.seek(0);
+            spdlog::warn("Scene detection returned no results, treating as single scene");
+            scenes.push_back({0, reader.frame_count()});
+        }
+
+        spdlog::info("Detected {} scene(s)", scenes.size());
+
+        // Single full-video watermark detection
+        if (config.force) {
+            cv::Point default_pos;
+            if (video_alpha && !video_alpha->empty()) {
+                default_pos = {static_cast<int>(reader.width()) - geo.margin_right - video_alpha->cols,
+                               static_cast<int>(reader.height()) - geo.margin_bottom - video_alpha->rows};
+                shot.region = cv::Rect(default_pos.x, default_pos.y, video_alpha->cols, video_alpha->rows);
+            } else {
+                default_pos = geo.get_position(reader.width(), reader.height());
+                shot.region = cv::Rect(default_pos.x, default_pos.y, geo.logo_size, geo.logo_size);
+            }
+            shot.found = false;
+            shot.position = default_pos;
+            shot.size = wsize;
+            shot.confidence = 1.0f;
+            spdlog::info("Force mode: using position ({},{}) size={}",
+                         shot.position.x, shot.position.y, geo.logo_size);
         } else {
-            // Per-scene watermark detection using main reader
-            int watermarked_count = 0;
-            for (auto& scene : scenes) {
-                if (config.force) {
-                    scene.has_watermark = true;
-                    scene.detected = true;
-                    scene.position = geo.get_position(reader.width(), reader.height());
-                    scene.size = wsize;
-                    scene.confidence = 1.0f;
-                    scene.region = cv::Rect(scene.position.x, scene.position.y,
-                                            geo.logo_size, geo.logo_size);
-                    if (video_alpha && !video_alpha->empty()) {
-                        scene.position = {reader.width() - geo.margin_right - video_alpha->cols,
-                                          reader.height() - geo.margin_bottom - video_alpha->rows};
-                        scene.region = cv::Rect(scene.position.x, scene.position.y,
-                                                video_alpha->cols, video_alpha->rows);
-                    }
-                    ++watermarked_count;
+            shot = detect_in_shot(reader, engine, config);
+        }
+
+        reader.seek(0);
+
+        // Output naming: <stem>_<NNN>.mp4
+        namespace fs = std::filesystem;
+        const std::string stem = fs::path(input_path).stem().string();
+        const fs::path out_dir(output_path);
+        const int num_scenes = static_cast<int>(scenes.size());
+        const int pad_width = std::max(3, static_cast<int>(
+            std::ceil(std::log10(static_cast<double>(num_scenes) + 1))));
+
+        // Process each scene sequentially (reader stays in position between scenes)
+        for (int si = 0; si < num_scenes; ++si) {
+            const auto& scene = scenes[si];
+            const int64_t scene_frames = scene.end_frame - scene.start_frame;
+            const double start_sec = static_cast<double>(scene.start_frame) / reader.fps();
+            const double end_sec = static_cast<double>(scene.end_frame) / reader.fps();
+
+            const std::string out_name = fmt::format("{}_{:0{}}.mp4", stem, si + 1, pad_width);
+            const fs::path out_path = out_dir / out_name;
+
+            spdlog::info("Scene {}/{}: {} (frames [{},{}), {:.2f}s)",
+                         si + 1, num_scenes, out_name,
+                         scene.start_frame, scene.end_frame,
+                         static_cast<double>(scene_frames) / reader.fps());
+
+            // Create writer for this scene
+            VideoWriter writer;
+            if (!writer.open(out_path.string(), reader.width(), reader.height(),
+                             reader.fps(), encode_opts, input_path)) {
+                spdlog::error("Failed to open output for scene {}: {}",
+                              si + 1, out_path.string());
+                result.success = false;
+                result.message = fmt::format("Failed to open output for scene {}", si + 1);
+                reader.close();
+                return result;
+            }
+
+            // Process frames for this scene (sequential decode, no seeking)
+            cv::Mat frame;
+            int64_t scene_processed = 0;
+            for (int64_t fi = scene.start_frame; fi < scene.end_frame; ++fi) {
+                if (!reader.next_frame(frame)) {
+                    spdlog::warn("Scene {}: unexpected EOF at frame {}", si + 1, fi);
+                    break;
+                }
+
+                if (frame.empty()) {
+                    spdlog::warn("Scene {}: frame {} empty, skipping", si + 1, fi);
+                    ++result.frames_skipped;
                     continue;
                 }
 
-                int scene_samples = static_cast<int>(
-                    std::min(static_cast<int64_t>(kShotSampleCount),
-                             std::max(static_cast<int64_t>(2),
-                                      (scene.end_frame - scene.start_frame) / 30)));
-
-                auto scene_shot = detect_in_shot(reader, engine, config,
-                                                  scene.start_frame,
-                                                  scene.end_frame,
-                                                  scene_samples);
-                scene.has_watermark = scene_shot.found;
-                scene.detected = scene_shot.found;
-                scene.position = scene_shot.position;
-                scene.size = scene_shot.size;
-                scene.confidence = scene_shot.confidence;
-                scene.region = scene_shot.region;
-
-                if (scene_shot.found) {
-                    ++watermarked_count;
+                if (frame.cols != reader.width() || frame.rows != reader.height()) {
+                    spdlog::warn("Scene {}: frame {} unexpected dimensions {}x{}",
+                                 si + 1, fi, frame.cols, frame.rows);
+                    ++result.frames_skipped;
+                    continue;
                 }
-            }
 
-            reader.seek(0);
+                // Apply watermark removal (same logic as non-scene branch)
+                if (config.force) {
+                    DetectionResult det;
+                    det.detected = true;
+                    det.confidence = 1.0f;
+                    det.region = shot.region;
+                    det.size = shot.size;
+                    engine.remove_watermark_alpha_only(frame, det, video_alpha);
+                } else {
+                    DetectionResult det;
+                    det.detected = true;
+                    det.confidence = shot.confidence;
+                    det.region = shot.region;
+                    det.size = shot.size;
 
-            spdlog::info("Detected {} scene(s): {} watermarked",
-                         scenes.size(), watermarked_count);
-
-            // Build shot from first watermarked scene for result reporting
-            for (const auto& s : scenes) {
-                if (s.has_watermark) {
-                    shot.found = true;
-                    shot.position = s.position;
-                    shot.size = s.size;
-                    shot.confidence = s.confidence;
-                    shot.region = s.region;
-                    break;
-                }
-            }
-        }
-
-        // Open output writer
-        VideoWriter writer;
-        if (!writer.open(output_path, reader.width(), reader.height(),
-                         reader.fps(), encode_opts, input_path)) {
-            result.success = false;
-            result.message = fmt::format("Failed to open output: {}", output_path);
-            spdlog::error("{}", result.message);
-            reader.close();
-            return result;
-        }
-
-        // Pass 2: Process frames with per-scene handling
-        cv::Mat frame;
-        int64_t frame_idx = 0;
-        int64_t last_progress_frame = 0;
-        auto t_last_progress = t_start;
-        size_t scene_idx = 0;
-
-        while (reader.next_frame(frame)) {
-            // Advance scene index
-            while (scene_idx + 1 < scenes.size() &&
-                   frame_idx >= scenes[scene_idx].end_frame) {
-                ++scene_idx;
-            }
-
-            const auto& current_scene = scenes[scene_idx];
-
-            if (frame.empty()) {
-                spdlog::warn("Frame {}: empty, skipping", frame_idx);
-                writer.write_frame(frame);
-                ++result.frames_skipped;
-                ++frame_idx;
-                continue;
-            }
-
-            if (frame.cols != reader.width() || frame.rows != reader.height()) {
-                spdlog::warn("Frame {}: unexpected dimensions {}x{} (expected {}x{}), skipping",
-                             frame_idx, frame.cols, frame.rows,
-                             reader.width(), reader.height());
-                ++result.frames_skipped;
-                ++frame_idx;
-                continue;
-            }
-
-            if (current_scene.has_watermark) {
-                // Remove watermark using scene-specific anchor
-                DetectionResult det;
-                det.detected = true;
-                det.confidence = current_scene.confidence;
-                det.region = current_scene.region;
-                det.size = current_scene.size;
-
-                if (!config.force) {
                     auto detection = engine.detect_watermark(frame, wsize, geo, video_alpha);
                     if (detection.detected &&
                         detection.confidence >= kOcclusionGateNcc) {
                         cv::Point detected_pos(detection.region.x, detection.region.y);
-                        int dx = std::abs(detected_pos.x - current_scene.position.x);
-                        int dy = std::abs(detected_pos.y - current_scene.position.y);
-
+                        int dx = std::abs(detected_pos.x - shot.position.x);
+                        int dy = std::abs(detected_pos.y - shot.position.y);
                         if (dx <= kPositionTolerancePx && dy <= kPositionTolerancePx) {
                             det.region = detection.region;
                             det.size = detection.size;
                         }
                     }
+
+                    engine.remove_watermark_alpha_only(frame, det, video_alpha);
                 }
 
-                engine.remove_watermark_alpha_only(frame, det, video_alpha);
+                writer.write_frame(frame);
+                ++scene_processed;
+                ++result.frames_processed;
             }
-            // Non-watermarked scenes: pass through unchanged
 
-            writer.write_frame(frame);
-            ++result.frames_processed;
-
-            // Progress output
-            ++frame_idx;
-            auto t_now = std::chrono::steady_clock::now();
-            double since_last = std::chrono::duration<double>(t_now - t_last_progress).count();
-
-            if (frame_idx - last_progress_frame >= kProgressIntervalFrames ||
-                since_last >= 2.0) {
-                double elapsed = std::chrono::duration<double>(t_now - t_start).count();
-                double proc_fps = static_cast<double>(frame_idx) / std::max(elapsed, 1e-9);
-                int64_t remaining = reader.frame_count() - frame_idx;
-                double eta = (remaining > 0) ? (static_cast<double>(remaining) / proc_fps) : 0.0;
-
-                spdlog::info("Frame {}/{} ({:.1f} fps, ETA {:.0f}s)",
-                             frame_idx, reader.frame_count(), proc_fps, eta);
-
-                last_progress_frame = frame_idx;
-                t_last_progress = t_now;
+            // Copy audio for this scene's time range
+            if (!writer.copy_audio_range(start_sec, end_sec)) {
+                spdlog::warn("Scene {}: audio range copy failed", si + 1);
             }
+
+            writer.close();
+
+            double scene_dur = static_cast<double>(scene_processed) / reader.fps();
+            spdlog::info("Scene {}/{}: {} done ({} frames, {:.2f}s)",
+                         si + 1, num_scenes, out_name, scene_processed, scene_dur);
         }
 
-        // Copy audio
-        if (!writer.copy_audio()) {
-            spdlog::warn("Audio copy failed or no audio stream present");
-        }
-
-        writer.close();
         reader.close();
 
     } else {

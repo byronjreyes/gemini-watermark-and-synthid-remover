@@ -39,6 +39,7 @@ public:
               const std::string& audio_source = "");
     bool write_frame(const cv::Mat& frame);
     bool copy_audio();
+    bool copy_audio_range(double start_sec, double end_sec);
     void close();
 
 private:

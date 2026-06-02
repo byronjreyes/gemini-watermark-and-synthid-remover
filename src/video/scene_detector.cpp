@@ -13,21 +13,14 @@ SceneDetector::SceneDetector(SceneDetectorConfig config)
     : config_(config) {}
 
 cv::Mat SceneDetector::prepare_frame(const cv::Mat& frame) const {
-    cv::Mat gray;
-    if (frame.channels() > 1) {
-        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
-    } else {
-        gray = frame;
-    }
-
-    int max_dim = std::max(gray.cols, gray.rows);
+    int max_dim = std::max(frame.cols, frame.rows);
     if (max_dim <= 320) {
-        return gray;
+        return frame.clone();
     }
 
     double scale = 320.0 / static_cast<double>(max_dim);
     cv::Mat small;
-    cv::resize(gray, small, {}, scale, scale, cv::INTER_AREA);
+    cv::resize(frame, small, {}, scale, scale, cv::INTER_AREA);
     return small;
 }
 
@@ -36,15 +29,32 @@ double SceneDetector::compute_distance(const cv::Mat& prev, const cv::Mat& curr)
     constexpr float kRange[] = {0.0f, 256.0f};
     const float* kRanges = kRange;
 
-    cv::Mat hist_prev, hist_curr;
+    // Per-channel Bhattacharyya, take max across BGR channels
+    double max_bhatt = 0.0;
+    const int channels = std::min(prev.channels(), 3);
 
-    cv::calcHist(&prev, 1, nullptr, cv::Mat(), hist_prev, 1, &kBins, &kRanges);
-    cv::calcHist(&curr, 1, nullptr, cv::Mat(), hist_curr, 1, &kBins, &kRanges);
+    for (int c = 0; c < channels; ++c) {
+        cv::Mat prev_ch, curr_ch;
+        cv::extractChannel(prev, prev_ch, c);
+        cv::extractChannel(curr, curr_ch, c);
 
-    cv::normalize(hist_prev, hist_prev, 1.0, 0.0, cv::NORM_L1);
-    cv::normalize(hist_curr, hist_curr, 1.0, 0.0, cv::NORM_L1);
+        cv::Mat hist_prev, hist_curr;
+        cv::calcHist(&prev_ch, 1, nullptr, cv::Mat(), hist_prev, 1, &kBins, &kRanges);
+        cv::calcHist(&curr_ch, 1, nullptr, cv::Mat(), hist_curr, 1, &kBins, &kRanges);
 
-    return cv::compareHist(hist_prev, hist_curr, cv::HISTCMP_BHATTACHARYYA);
+        cv::normalize(hist_prev, hist_prev, 1.0, 0.0, cv::NORM_L1);
+        cv::normalize(hist_curr, hist_curr, 1.0, 0.0, cv::NORM_L1);
+
+        double dist = cv::compareHist(hist_prev, hist_curr, cv::HISTCMP_BHATTACHARYYA);
+        max_bhatt = std::max(max_bhatt, dist);
+    }
+
+    // Mean absolute pixel difference (normalized to [0, 1])
+    cv::Mat diff;
+    cv::absdiff(prev, curr, diff);
+    double mad = cv::mean(diff)[0] / 255.0;
+
+    return std::max(max_bhatt, mad);
 }
 
 std::vector<SceneInfo> SceneDetector::merge_short_scenes(

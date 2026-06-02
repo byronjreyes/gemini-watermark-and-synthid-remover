@@ -360,6 +360,128 @@ bool VideoWriter::copy_audio() {
     return true;
 }
 
+bool VideoWriter::copy_audio_range(double start_sec, double end_sec) {
+    if (audio_mappings_.empty()) {
+        audio_copied_ = true;
+        return true;
+    }
+
+    if (!fmt_ctx_ || !header_written_) {
+        spdlog::error("VideoWriter: not open, cannot copy audio range");
+        return false;
+    }
+
+    if (audio_source_path_.empty()) {
+        spdlog::warn("VideoWriter: no audio source path set");
+        return false;
+    }
+
+    // Open fresh input context
+    AVFormatContext* in_fmt_ctx = nullptr;
+    int ret = avformat_open_input(&in_fmt_ctx, audio_source_path_.c_str(), nullptr, nullptr);
+    if (ret < 0) {
+        spdlog::error("VideoWriter: failed to open input for audio range copy: error {}", ret);
+        return false;
+    }
+
+    ret = avformat_find_stream_info(in_fmt_ctx, nullptr);
+    if (ret < 0) {
+        spdlog::error("VideoWriter: failed to find stream info for audio range: error {}", ret);
+        avformat_close_input(&in_fmt_ctx);
+        return false;
+    }
+
+    // Seek to start time (AV_TIME_BASE units, stream index -1 for all streams)
+    int64_t start_ts_av = static_cast<int64_t>(start_sec * AV_TIME_BASE);
+    ret = avformat_seek_file(in_fmt_ctx, -1, INT64_MIN, start_ts_av, INT64_MAX,
+                             AVSEEK_FLAG_BACKWARD);
+    if (ret < 0) {
+        // Seek failed — fall back to sequential scan from beginning
+        spdlog::debug("VideoWriter: audio seek failed (error {}), using sequential scan", ret);
+    }
+
+    AVPacket* read_pkt = av_packet_alloc();
+    if (!read_pkt) {
+        spdlog::error("VideoWriter: failed to allocate read packet for audio range");
+        avformat_close_input(&in_fmt_ctx);
+        return false;
+    }
+
+    int64_t audio_packets_written = 0;
+
+    while (true) {
+        ret = av_read_frame(in_fmt_ctx, read_pkt);
+        if (ret < 0) {
+            if (ret == AVERROR_EOF) break;
+            spdlog::warn("VideoWriter: error reading audio packet: error {}", ret);
+            break;
+        }
+
+        for (const auto& mapping : audio_mappings_) {
+            if (read_pkt->stream_index != mapping.in_stream_idx) continue;
+
+            AVStream* in_s = in_fmt_ctx->streams[mapping.in_stream_idx];
+            AVStream* out_s = fmt_ctx_->streams[mapping.out_stream_idx];
+
+            // Convert packet PTS to seconds
+            double pkt_sec = (read_pkt->pts != AV_NOPTS_VALUE)
+                ? av_q2d(in_s->time_base) * static_cast<double>(read_pkt->pts)
+                : -1.0;
+
+            // Skip packets before the range start
+            if (pkt_sec >= 0.0 && pkt_sec < start_sec) {
+                break;
+            }
+
+            // Stop at range end (exclusive)
+            if (pkt_sec >= 0.0 && pkt_sec >= end_sec) {
+                av_packet_unref(read_pkt);
+                // Force exit from outer loop
+                av_packet_free(&read_pkt);
+                avformat_close_input(&in_fmt_ctx);
+                spdlog::info("VideoWriter: copied {} audio packets (range {:.2f}s-{:.2f}s)",
+                             audio_packets_written, start_sec, end_sec);
+                audio_copied_ = true;
+                return true;
+            }
+
+            // Rescale to output time_base first
+            av_packet_rescale_ts(read_pkt, in_s->time_base, out_s->time_base);
+
+            // Subtract start offset so audio begins at PTS 0
+            int64_t offset_tb = av_rescale_q(start_ts_av, AV_TIME_BASE_Q, out_s->time_base);
+            read_pkt->pts -= offset_tb;
+            read_pkt->dts -= offset_tb;
+
+            // Guard against negative PTS (packets at seek boundary)
+            if (read_pkt->pts < 0) {
+                break;
+            }
+
+            read_pkt->stream_index = mapping.out_stream_idx;
+            read_pkt->pos = -1;
+
+            ret = av_interleaved_write_frame(fmt_ctx_, read_pkt);
+            if (ret < 0) {
+                spdlog::warn("VideoWriter: error writing audio packet: error {}", ret);
+            } else {
+                ++audio_packets_written;
+            }
+            break;
+        }
+
+        av_packet_unref(read_pkt);
+    }
+
+    av_packet_free(&read_pkt);
+    avformat_close_input(&in_fmt_ctx);
+
+    spdlog::info("VideoWriter: copied {} audio packets (range {:.2f}s-{:.2f}s)",
+                 audio_packets_written, start_sec, end_sec);
+    audio_copied_ = true;
+    return true;
+}
+
 void VideoWriter::close() {
     // Flush encoder
     if (codec_ctx_ && header_written_) {
