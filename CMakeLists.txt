@@ -48,6 +48,19 @@ find_package(spdlog REQUIRED)
 find_package(FFTW3f REQUIRED)
 find_package(FFMPEG REQUIRED)
 
+# Homebrew's fftw3 ships a variable-only CMake config (FFTW3f_LIBRARIES is the
+# bare library name) with no imported target, whereas vcpkg provides FFTW3::fftw3f.
+# Synthesize the target from the variables when it is missing so the test
+# executable (which links FFTW3::fftw3f) builds under both providers. No-op when
+# the provider already supplies the target (e.g. vcpkg).
+if(FFTW3f_FOUND AND NOT TARGET FFTW3::fftw3f)
+    add_library(FFTW3::fftw3f INTERFACE IMPORTED)
+    set_target_properties(FFTW3::fftw3f PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${FFTW3f_INCLUDE_DIRS}"
+        INTERFACE_LINK_DIRECTORIES "${FFTW3f_LIBRARY_DIRS}"
+        INTERFACE_LINK_LIBRARIES "${FFTW3f_LIBRARIES}")
+endif()
+
 target_link_libraries(${PROJECT_NAME} PRIVATE
     opencv_core
     opencv_imgcodecs

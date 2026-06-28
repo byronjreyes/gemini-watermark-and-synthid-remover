@@ -53,20 +53,23 @@ foreach(_comp IN LISTS _FFMPEG_COMPONENTS)
     find_path(${_comp}_INCLUDE_DIR
         NAMES lib${_comp}/${_comp}.h
         HINTS
-            ${PC_${_comp}_INCLUDEDIR}
-            ${PC_${_comp}_INCLUDE_DIRS}
+            # Prefer FFMPEG_ROOT (the stable Homebrew opt symlink) over the
+            # versioned Cellar realpath returned by pkg-config, so the cached
+            # path survives a `brew upgrade`.
             ${FFMPEG_ROOT}
             $ENV{FFMPEG_ROOT}
+            ${PC_${_comp}_INCLUDEDIR}
+            ${PC_${_comp}_INCLUDE_DIRS}
         PATH_SUFFIXES include
     )
 
     find_library(${_comp}_LIBRARY
         NAMES ${_comp}
         HINTS
-            ${PC_${_comp}_LIBDIR}
-            ${PC_${_comp}_LIBRARY_DIRS}
             ${FFMPEG_ROOT}
             $ENV{FFMPEG_ROOT}
+            ${PC_${_comp}_LIBDIR}
+            ${PC_${_comp}_LIBRARY_DIRS}
         PATH_SUFFIXES lib lib64
     )
 

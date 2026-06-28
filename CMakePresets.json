@@ -46,6 +46,34 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
       }
+    },
+    {
+      "name": "mac-homebrew-base",
+      "hidden": true,
+      "inherits": "base",
+      "generator": "Ninja",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0",
+        "CMAKE_PREFIX_PATH": "/opt/homebrew/opt/opencv;/opt/homebrew/opt/fftw;/opt/homebrew/opt/ffmpeg;/opt/homebrew/opt/catch2;/opt/homebrew/opt/fmt;/opt/homebrew/opt/spdlog;/opt/homebrew/opt/cli11",
+        "OpenCV_DIR": "/opt/homebrew/opt/opencv/lib/cmake/opencv4",
+        "FFTW3f_DIR": "/opt/homebrew/opt/fftw/lib/cmake/fftw3",
+        "FFMPEG_ROOT": "/opt/homebrew/opt/ffmpeg",
+        "WMR_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "mac-homebrew-Release",
+      "displayName": "macOS Release (Homebrew system libs)",
+      "inherits": "mac-homebrew-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "mac-homebrew-Debug",
+      "displayName": "macOS Debug (Homebrew system libs)",
+      "inherits": "mac-homebrew-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
     }
   ],
   "buildPresets": [
@@ -56,6 +84,14 @@
     {
       "name": "mac-x64-Debug",
       "configurePreset": "mac-x64-Debug"
+    },
+    {
+      "name": "mac-homebrew-Release",
+      "configurePreset": "mac-homebrew-Release"
+    },
+    {
+      "name": "mac-homebrew-Debug",
+      "configurePreset": "mac-homebrew-Debug"
     }
   ]
 }

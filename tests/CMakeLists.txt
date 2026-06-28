@@ -22,7 +22,10 @@ set(LIB_SOURCES
     ${CMAKE_SOURCE_DIR}/src/synthid/spectral_codebook.cpp
     ${CMAKE_SOURCE_DIR}/src/synthid/codebook_subtractor.cpp
     ${CMAKE_SOURCE_DIR}/src/synthid/codebook_builder.cpp
-    ${CMAKE_SOURCE_DIR}/src/video/scene_detector.cpp
+    # NOTE: src/video/scene_detector.cpp is intentionally excluded — it pulls in
+    # VideoReader (FFmpeg), which the test target does not link. No test
+    # references SceneDetector today; re-add it (with the FFMPEG link) if a
+    # scene-detection test is added.
 )
 
 add_executable(wmr_tests ${TEST_SOURCES} ${LIB_SOURCES})

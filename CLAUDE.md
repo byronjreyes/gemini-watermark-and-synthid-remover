@@ -4,38 +4,39 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build Commands
 
+**Recommended (macOS/Homebrew) — robust to `brew upgrade`:**
+```bash
+scripts/build.sh                 # Release build + tests; self-heals a stale cache
+BUILD_TYPE=Debug scripts/build.sh
+RUN_TESTS=0 scripts/build.sh     # build only
+```
+`scripts/build.sh` verifies the required Homebrew formulas, auto-wipes + reconfigures when a cached dependency path has vanished after an upgrade, and configures against the stable `/opt/homebrew/opt/…` symlinks. Binaries: `build/wmr`, `build/tests/wmr_tests`. Test suite needs Catch2 (`brew install catch2`).
+
+Or, arm64 preset: `cmake --preset mac-homebrew-Release && cmake --build --preset mac-homebrew-Release`.
+
+**System libs (macOS/Homebrew) — manual, no vcpkg:**
+```bash
+cmake -B build -S . -GNinja \
+  -DCMAKE_PREFIX_PATH="$(brew --prefix opencv);$(brew --prefix fftw);$(brew --prefix ffmpeg);$(brew --prefix catch2);$(brew --prefix fmt);$(brew --prefix spdlog);$(brew --prefix cli11)" \
+  -DOpenCV_DIR=$(brew --prefix opencv)/lib/cmake/opencv4 \
+  -DFFTW3f_DIR=$(brew --prefix fftw)/lib/cmake/fftw3 \
+  -DFFMPEG_ROOT=$(brew --prefix ffmpeg) \
+  -DWMR_BUILD_TESTS=ON
+cmake --build build
+```
+
 **vcpkg (all platforms):**
 ```bash
 cmake -B build -S . -GNinja
 cmake --build build
 ```
 
-**System libs (macOS/Homebrew) — no vcpkg needed:**
-```bash
-cmake -B build -S . -GNinja \
-  -DOpenCV_DIR=$(brew --prefix opencv)/lib/cmake/opencv4 \
-  -DFFTW3f_DIR=$(brew --prefix fftw)/lib/cmake/fftw3 \
-  -DWMR_BUILD_TESTS=OFF
-cmake --build build
-```
-
 **Tests:**
 ```bash
-cmake -B build -S . -GNinja  # ensure WMR_BUILD_TESTS=ON (default)
-cmake --build build
-cd /path/to/project/root && ctest --test-dir build --output-on-failure
+ctest --test-dir build --output-on-failure
+./build/tests/wmr_tests "[v2]"          # single tag (path: tests/wmr_tests)
 ```
-
 Integration tests need project root as CWD (they look for `test-images/` relative to CWD). Tests use `SKIP` macro if test data is absent, so they don't fail without it.
-
-**Single test by tag:**
-```bash
-./build/wmr_tests "[blend]"
-./build/wmr_tests "[fft]"
-./build/wmr_tests "[inpaint]"
-./build/wmr_tests "[codebook]"
-./build/wmr_tests "[integration]"
-```
 
 ## Architecture
 
