@@ -82,6 +82,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write   # create release + attach assets (fixes "Resource not accessible by integration")
 
     steps:
       - uses: actions/checkout@v4
