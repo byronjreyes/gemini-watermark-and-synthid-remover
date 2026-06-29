@@ -15,6 +15,24 @@ A C++20 CLI tool for removing visible and invisible watermarks from images and v
 
 ## Quick Start
 
+### Download
+
+Prebuilt binaries for every release are on the [Releases page](https://github.com/froggeric/gemini-watermark-and-synthid-remover/releases) — no build step required:
+
+| Asset | Platform | Notes |
+|-------|----------|-------|
+| `wmr-macos-arm64`, `wmr-macos-x86_64` | macOS | Lean, AI-free, self-contained |
+| `wmr-linux-x86_64` | Linux | Lean, AI-free, self-contained |
+| `wmr-windows-x86_64.exe` | Windows | Lean, AI-free, self-contained |
+| `wmr-macos-arm64-ai.tar.gz` | macOS arm64 | FDnCNN AI denoise + bundled Vulkan/MoltenVK (GPU); see [AI Denoise](#ai-denoise-optional) |
+
+```bash
+chmod +x wmr-macos-arm64        # macOS/Linux single binary
+./wmr-macos-arm64 --version
+```
+
+The lean builds are single self-contained executables. The AI build ships as a tarball (`wmr` launcher + `wmr.bin` + `lib/`) — extract it and run `./wmr` (see [AI Denoise](#ai-denoise-optional)). On macOS, clear Gatekeeper's quarantine if prompted: `xattr -dr com.apple.quarantine <file-or-dir>`.
+
 ### Build
 
 Requires: CMake 3.21+, C++20 compiler, Ninja (recommended).
@@ -242,7 +260,7 @@ cd wmr-macos-arm64-ai
 ./wmr remove input.png --denoise ai -o out.png    # GPU via bundled MoltenVK; CPU fallback if no Metal
 ```
 
-The `wmr` launcher points the Vulkan loader at the bundled ICD (`VK_ICD_FILENAMES`) then `exec`s the real binary (`wmr.bin`); both ship in the tarball's `lib/`. macOS Gatekeeper may quarantine the ad-hoc-signed binary on first run — if so, clear it: `xattr -dr com.apple.quarantine wmr-macos-arm64-ai`. Third-party licenses: `LICENSE-AI.md` (NCNN, volk, KAIR/FDnCNN).
+The `wmr` launcher points the Vulkan loader at the bundled ICD manifest (`VK_ICD_FILENAMES`) then `exec`s the real binary (`wmr.bin`); the Vulkan loader (`libvulkan`), MoltenVK (`libMoltenVK`), and ICD manifest ship in the tarball's `lib/`. A pre-set `VK_ICD_FILENAMES` is respected (override the ICD, or set it to a nonexistent path to force CPU). macOS Gatekeeper may quarantine the ad-hoc-signed binary on first run — if so, clear it: `xattr -dr com.apple.quarantine wmr-macos-arm64-ai`. Third-party licenses: `LICENSE-AI.md` (NCNN, volk, KAIR/FDnCNN).
 
 ## Dependencies
 
@@ -255,6 +273,9 @@ The `wmr` launcher points the Vulkan loader at the bundled ICD (`VK_ICD_FILENAME
 | CLI11 | Command-line argument parsing |
 | spdlog | Logging |
 | Catch2 | Test framework (optional, default ON) |
+| NCNN | Neural-network inference for the AI denoise (optional, `WMR_BUILD_AI_DENOISE` only) |
+| volk | Vulkan meta-loader (optional, AI build only) |
+| Vulkan loader + MoltenVK | Vulkan/Metal GPU for the AI denoise (optional; bundled into the `wmr-macos-arm64-ai` release) |
 | CMake + vcpkg | Build system and package management |
 
 ## Source Projects
