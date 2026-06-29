@@ -78,18 +78,17 @@ jobs:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}
 
-  # Optional AI-denoise build: produces a separate macOS arm64 binary with the
-  # FDnCNN NCNN/Vulkan denoiser compiled in. Mirrors upstream's verified AI
-  # build chain (NCNN submodule + vcpkg ai-denoise feature for volk, NO Vulkan
-  # SDK install). The 4-job `build` matrix above stays AI-free (R7): no
-  # submodules, no WMR_BUILD_AI_DENOISE, no ai-denoise vcpkg feature.
+  # AI-denoise build: a separate macOS arm64 binary with the FDnCNN NCNN/Vulkan
+  # denoiser compiled in. Mirrors upstream's AI build chain (NCNN submodule +
+  # vcpkg ai-denoise feature for volk, NO Vulkan SDK install). The Vulkan
+  # *loader* (libvulkan) + MoltenVK (libMoltenVK) are bundled next to the binary
+  # (scripts/bundle_macos_vulkan.sh) with an @loader_path rpath + a launcher that
+  # sets VK_ICD_FILENAMES, so the artifact runs on a clean macOS install — no
+  # Vulkan SDK, Homebrew, or MoltenVK needed. The 4-job `build` matrix above
+  # stays AI-free (R7): no submodules, no WMR_BUILD_AI_DENOISE, no ai-denoise
+  # vcpkg feature. Runs on tag pushes (ships the AI tarball) + manual dispatch.
   ai-denoise:
     runs-on: macos-14
-    # Manual-only for now: the AI macOS binary hard-links libvulkan (needs
-    # MoltenVK at runtime -> not standalone), so it's not attached to releases.
-    # Re-enable on tag pushes once MoltenVK-bundling is added. Test the heavy
-    # NCNN build off-cycle via workflow_dispatch.
-    if: github.event_name == 'workflow_dispatch'
 
     steps:
       - uses: actions/checkout@v4
@@ -101,14 +100,16 @@ jobs:
           runVcpkgInstall: true
           vcpkgJsonGlob: '**/vcpkg.json'
 
-      - name: Install MoltenVK (Vulkan loader)
-        # NCNN's NCNN_VULKAN=ON requires Vulkan_LIBRARY (libvulkan) at configure
-        # time. The bare macOS runner has no Vulkan loader; MoltenVK provides it.
-        run: brew install molten-vk
+      - name: Install Vulkan loader + MoltenVK
+        # NCNN_VULKAN=ON LINKS libvulkan (the loader) at build time. That dylib
+        # comes from the vulkan-loader formula — NOT molten-vk, which ships only
+        # libMoltenVK (the Metal ICD the loader dlopens at runtime). Both are
+        # bundled into the artifact post-build so it runs on a clean machine.
+        run: brew install vulkan-loader molten-vk
 
       - name: Configure (AI)
         run: |
-          VKLIB="$(brew --prefix molten-vk)/lib/libvulkan.dylib"
+          VKLIB="$(brew --prefix vulkan-loader)/lib/libvulkan.dylib"
           cmake -B build -S . -GNinja \
             -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
             -DWMR_BUILD_TESTS=OFF \
@@ -123,12 +124,23 @@ jobs:
       - name: Smoke test (--version)
         run: ./build/wmr --version
 
-      - name: Package
+      - name: Denoise smoke (GPU path + clean teardown)
+        # Exercises Vulkan GPU init and process-exit teardown. Guards against the
+        # ncnn static-singleton destructor crash (EXC_BAD_ACCESS in
+        # VulkanDevice::vkdevice() at exit) that previously segfaulted the GPU path.
+        run: ./build/wmr remove test-images/2400x1792-test1-gemini.png --denoise ai -o /tmp/clean.png
+
+      - name: Bundle Vulkan loader + MoltenVK into a standalone tarball
         run: |
-          mkdir -p dist
-          cp build/wmr dist/wmr-macos-arm64-ai
-          chmod +x dist/wmr-macos-arm64-ai
-          cp LICENSE-AI.md dist/           # licenses travel with the shipped binary
+          mkdir -p staging dist
+          ./scripts/bundle_macos_vulkan.sh build/wmr staging/wmr-macos-arm64-ai
+          tar -czf dist/wmr-macos-arm64-ai.tar.gz -C staging wmr-macos-arm64-ai
+          cp LICENSE-AI.md dist/            # license travels with the shipped binary
+
+      - name: Verify the bundled artifact runs end-to-end
+        run: |
+          mkdir -p /tmp/verify && tar -xzf dist/wmr-macos-arm64-ai.tar.gz -C /tmp/verify
+          /tmp/verify/wmr-macos-arm64-ai/wmr remove test-images/2400x1792-test1-gemini.png --denoise ai -o /tmp/clean-bundled.png
 
       - uses: actions/upload-artifact@v4
         with:
@@ -136,7 +148,7 @@ jobs:
           path: dist/
 
   release:
-    needs: [build]   # ai-denoise is manual-only until MoltenVK-bundling makes the AI binary portable
+    needs: [build, ai-denoise]   # AI tarball ships with every release
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
@@ -161,3 +173,5 @@ jobs:
             artifacts/wmr-macos-x86_64/wmr-macos-x86_64
             artifacts/wmr-linux-x86_64/wmr-linux-x86_64
             artifacts/wmr-windows-x86_64.exe/wmr-windows-x86_64.exe
+            artifacts/wmr-macos-arm64-ai/wmr-macos-arm64-ai.tar.gz
+            artifacts/wmr-macos-arm64-ai/LICENSE-AI.md

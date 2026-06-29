@@ -204,8 +204,8 @@ SynthID invisible watermarks are embedded via a neural encoder in the frequency 
 An optional FDnCNN denoiser (NCNN + Vulkan, with CPU fallback) can replace the hand-crafted Gaussian/TELEA/NS cleanup as a learned residual-cleanup method after reverse alpha blending. It is **OFF by default**; the standard build is lean and AI-free.
 
 ```bash
-# Build with AI (macOS/Homebrew): needs vulkan-volk + molten-vk
-brew install vulkan-volk molten-vk
+# Build with AI (macOS/Homebrew): needs the Vulkan loader + MoltenVK
+brew install vulkan-volk vulkan-loader vulkan-headers molten-vk
 WMR_AI_DENOISE=1 ./scripts/build.sh
 
 # Or via vcpkg (the ai-denoise manifest feature pulls volk + Vulkan headers):
@@ -234,7 +234,15 @@ wmr remove input.png --sigma 75 --strength 150 -o out.png   # tune
 
 These flags are only present when built with `WMR_BUILD_AI_DENOISE=ON`; the lean build exposes only `--inpaint-strength`.
 
-**Release binaries:** the default release ships lean, AI-free binaries (`wmr-macos-arm64`, `wmr-macos-x86_64`, `wmr-linux-x86_64`, `wmr-windows-x86_64.exe`). A separate `wmr-macos-arm64-ai` artifact (macOS arm64) bundles the AI denoiser; its third-party licenses are in `LICENSE-AI.md` (NCNN, volk, KAIR/FDnCNN).
+**Release binaries:** the default release ships lean, AI-free binaries (`wmr-macos-arm64`, `wmr-macos-x86_64`, `wmr-linux-x86_64`, `wmr-windows-x86_64.exe`) — single self-contained executables. A separate **`wmr-macos-arm64-ai.tar.gz`** (macOS arm64) bundles the AI denoiser *and* the Vulkan loader (`libvulkan`) + MoltenVK, so it runs on a clean macOS install with no Vulkan SDK, Homebrew, or MoltenVK installed — the Metal GPU driver ships with it. Extract and run the `wmr` launcher:
+
+```bash
+tar xzf wmr-macos-arm64-ai.tar.gz
+cd wmr-macos-arm64-ai
+./wmr remove input.png --denoise ai -o out.png    # GPU via bundled MoltenVK; CPU fallback if no Metal
+```
+
+The `wmr` launcher points the Vulkan loader at the bundled ICD (`VK_ICD_FILENAMES`) then `exec`s the real binary (`wmr.bin`); both ship in the tarball's `lib/`. macOS Gatekeeper may quarantine the ad-hoc-signed binary on first run — if so, clear it: `xattr -dr com.apple.quarantine wmr-macos-arm64-ai`. Third-party licenses: `LICENSE-AI.md` (NCNN, volk, KAIR/FDnCNN).
 
 ## Dependencies
 

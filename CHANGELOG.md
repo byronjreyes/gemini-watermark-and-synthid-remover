@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.4.0] - 2026-06-29
+
+### Standalone macOS AI Binary
+
+The `wmr-macos-arm64-ai` artifact (deferred in 1.3.0) now ships and runs on a clean macOS install.
+
+#### Added
+- `wmr-macos-arm64-ai.tar.gz` release artifact — bundles the Vulkan **loader** (`libvulkan.1.dylib`) + **MoltenVK** (`libMoltenVK.dylib`) + an ICD manifest next to the binary, so the Metal GPU driver travels with it. No Vulkan SDK, Homebrew, or MoltenVK needed at runtime. Layout: `wmr` (launcher) + `wmr.bin` (binary) + `lib/`. The `wmr` launcher sets `VK_ICD_FILENAMES` to the bundled manifest, then `exec`s `wmr.bin`.
+- `scripts/bundle_macos_vulkan.sh` — rewrites the binary's `libvulkan` load command to `@rpath` + adds an `@loader_path/lib` rpath, writes a co-located ICD manifest (`library_path` relative to itself), ad-hoc re-signs (Apple Silicon kills stale-signed Mach-Os), and emits the launcher. Used by CI; works locally too.
+- The `ai-denoise` CI job now installs `vulkan-loader` (the source of `libvulkan` — `molten-vk` ships only `libMoltenVK`), bundles the dylibs, and verifies the extracted artifact end-to-end (a GPU denoise through the launcher). Re-enabled on tag pushes and re-coupled to the `release` job, so the AI tarball ships with every release.
+
+#### Fixed
+- ncnn/Vulkan teardown crash: `wmr` segfaulted (EXC_BAD_ACCESS in `ncnn::VulkanDevice::vkdevice()`) on process exit whenever the GPU path ran, because the `NcnnDenoiser` process-singleton's `~ncnn::Net` destructor ran during C++ static teardown *after* ncnn's global Vulkan device was already torn down. The singleton is now an intentionally-leaked heap instance (`WatermarkEngine::denoiser()`) so its destructor never runs at exit — the standard pattern for a process singleton that owns a GL/Vulkan context. Per-image output was always saved; the fix makes the exit code clean (was 139/SIGSEGV). Surfaced now because bundling made the GPU path reliable (the CPU fallback path never created the device).
+
 ## [1.3.0] - 2026-06-28
 
 ### FDnCNN AI Denoise (optional) — Still-Image Residual Cleanup

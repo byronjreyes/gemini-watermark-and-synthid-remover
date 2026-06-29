@@ -365,8 +365,17 @@ cv::Mat WatermarkEngine::create_interpolated_alpha(int width, int height,
 
 #ifdef WMR_AI_DENOISE
 NcnnDenoiser& WatermarkEngine::denoiser() {
-    static NcnnDenoiser instance;  // process-wide; model loads on first use
-    return instance;
+    // Intentionally leaked (never destroyed). ncnn's Vulkan weight allocators
+    // reference the process-global GPU instance, which ncnn tears down at exit
+    // in an order we don't control. Destroying the embedded ncnn::Net during
+    // C++ static teardown can then dereference an already-freed Vulkan device
+    // (EXC_BAD_ACCESS in VulkanDevice::vkdevice() at exit). The model +
+    // ~few MB of runtime state are reclaimed by the OS at process exit, and the
+    // actual image work is already complete by then — so we skip the destructor
+    // rather than race the global GPU-instance teardown. Standard pattern for a
+    // process singleton that owns a GL/Vulkan context.
+    static NcnnDenoiser* instance = new NcnnDenoiser();  // process-wide; model loads on first use
+    return *instance;
 }
 #endif
 
