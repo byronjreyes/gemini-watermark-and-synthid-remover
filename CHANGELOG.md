@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.5.0] - 2026-07-10
+
+### NotebookLM video watermark removal
+
+New `--notebooklm` mode removes the NotebookLM rainbow logo + "NotebookLM" wordmark from generated videos (cinematic, explainer, short-portrait exports).
+
+- **Detection** (`src/video/notebooklm_detector.cpp`): template matching — multi-scale `|TM_CCOEFF_NORMED|` against each sampled frame, keep the best. Polarity-invariant (handles the adaptive light-on-dark / dark-on-light mark) and robust across scene cuts, where an earlier temporal-median-contrast detector failed. The detected bbox snaps to user-measured exact coordinates per known export mode.
+- **Removal**: per-frame Navier-Stokes `cv::inpaint` over the mark bbox (dilated), reusing the existing inpaint primitive. Reverse alpha-blend does **not** apply — the NotebookLM mark is semi-transparent, color-adaptive, and H.264-compressed, so it is not a reversible constant-alpha overlay.
+- **CLI**: `wmr video in.mp4 -o out.mp4 --notebooklm` (auto-detect); `--rect x,y,w,h` manual override for edge cases.
+- **Known limitation**: on complex/textured backgrounds (e.g. explainer mode), spatial inpaint fabricates the region from its boundary — usable but imperfect. A temporal reverse-alpha method that recovers the true background is planned.
+
+#### Changed
+- `VideoProfile` gains `NotebookLM`; `VideoWatermarkConfig` gains `notebooklm_rect`.
+- New embedded asset `notebooklm_mark_png` (98×14 grayscale template) in `assets/embedded_assets.hpp`.
+
 ## [1.4.0] - 2026-06-29
 
 ### Standalone macOS AI Binary

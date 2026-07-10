@@ -35,6 +35,8 @@ struct CliOptions {
     bool codebook_free = false;
     bool phase_adaptive = false;
     bool legacy_profile = false;       // video: Veo legacy text profile
+    bool notebooklm_profile = false;    // video: NotebookLM profile
+    std::string notebooklm_rect_str;     // video: manual rect override "x,y,w,h"
     bool still_legacy = false;         // still images: pin legacy V1 (Gemini pre-3.5)
     bool still_no_legacy = false;      // still images: pin current V2, disable V2→V1 fallback
     std::string video_variant_str;

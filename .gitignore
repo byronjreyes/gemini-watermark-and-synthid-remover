@@ -81,6 +81,9 @@ reference-images/synthid/
 # Derived test data
 test-images/reference-images/
 
+# Test videos (large, local-only)
+test-videos/
+
 # Temp analysis outputs
 analysis_*.png
 manual-test.png

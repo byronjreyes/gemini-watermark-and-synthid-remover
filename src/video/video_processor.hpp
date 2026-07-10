@@ -1,12 +1,14 @@
 #pragma once
 
 #include <string>
+#include <optional>
 #include <cstdint>
 #include <chrono>
 #include <opencv2/core.hpp>
 
 #include "core/types.hpp"
 #include "video/video_writer.hpp"
+#include "video/notebooklm_detector.hpp"
 
 namespace wmr {
 
@@ -16,6 +18,7 @@ struct VideoWatermarkConfig {
     bool force = false;
     float inpaint_strength = 0.85f;
     bool scenes = false;
+    std::optional<cv::Rect> notebooklm_rect;  // --rect x,y,w,h override
     double scene_threshold = 0.4;
 };
 
@@ -61,6 +64,12 @@ private:
         const VideoWatermarkConfig& config, int width, int height) const;
 
     WatermarkSize geometry_to_size(const WatermarkPosition& geo) const;
+
+    // NotebookLM path: detect + NS inpaint
+    VideoResult process_notebooklm(const std::string& input_path,
+                                    const std::string& output_path,
+                                    const VideoWatermarkConfig& config,
+                                    const EncodeOptions& encode_opts);
 };
 
 } // namespace wmr

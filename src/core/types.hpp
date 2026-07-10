@@ -108,6 +108,7 @@ enum class VideoVariant {
 enum class VideoProfile {
     GeminiDiamond,
     VeoLegacy,
+    NotebookLM,
 };
 
 inline WatermarkPosition get_video_watermark_geometry(

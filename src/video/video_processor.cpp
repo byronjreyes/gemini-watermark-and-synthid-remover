@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <spdlog/spdlog.h>
+#include <opencv2/photo.hpp>
 #include <fmt/format.h>
 
 extern "C" {
@@ -299,6 +300,11 @@ VideoResult VideoProcessor::process(const std::string& input_path,
 {
     VideoResult result;
     const auto t_start = std::chrono::steady_clock::now();
+
+    // NotebookLM uses a separate path (temporal detection + NS inpaint)
+    if (config.profile == VideoProfile::NotebookLM) {
+        return process_notebooklm(input_path, output_path, config, encode_opts);
+    }
 
     // Open input
     VideoReader reader;
@@ -619,6 +625,149 @@ VideoResult VideoProcessor::process(const std::string& input_path,
                  "elapsed={:.1f}s",
                  result.frames_processed, result.frames_skipped,
                  result.detection_confidence, result.elapsed_seconds);
+
+    return result;
+}
+
+
+// ---------------------------------------------------------------------------
+// NotebookLM processing: detect mark bbox, then per-frame NS inpaint
+// ---------------------------------------------------------------------------
+VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
+                                              const std::string& output_path,
+                                              const VideoWatermarkConfig& config,
+                                              const EncodeOptions& encode_opts)
+{
+    VideoResult result;
+    const auto t_start = std::chrono::steady_clock::now();
+
+    // Detect the watermark bbox
+    NotebookLMDetector detector;
+    auto det = detector.detect(input_path, config.notebooklm_rect);
+
+    if (!det.found) {
+        result.success = false;
+        result.message = "NotebookLM watermark not detected (use --rect x,y,w,h to specify manually)";
+        spdlog::error("{}", result.message);
+        return result;
+    }
+
+    spdlog::info("NotebookLM watermark bbox: ({},{},{},{})",
+                 det.bbox.x, det.bbox.y, det.bbox.width, det.bbox.height);
+
+    // Open input
+    VideoReader reader;
+    if (!reader.open(input_path)) {
+        result.success = false;
+        result.message = fmt::format("Failed to open input: {}", input_path);
+        spdlog::error("{}", result.message);
+        return result;
+    }
+
+    spdlog::info("Input: {} ({}x{}, {:.2f} fps, {} frames)",
+                 input_path, reader.width(), reader.height(),
+                 reader.fps(), reader.frame_count());
+
+    // Open output writer
+    VideoWriter writer;
+    if (!writer.open(output_path, reader.width(), reader.height(),
+                     reader.fps(), encode_opts, input_path)) {
+        result.success = false;
+        result.message = fmt::format("Failed to open output: {}", output_path);
+        spdlog::error("{}", result.message);
+        reader.close();
+        return result;
+    }
+
+    // Create binary mask for the watermark bbox (dilated slightly for clean edges)
+    cv::Rect mask_rect = det.bbox;
+    // Clamp to frame bounds
+    mask_rect.x = std::max(0, mask_rect.x);
+    mask_rect.y = std::max(0, mask_rect.y);
+    mask_rect.width = std::min(mask_rect.width, reader.width() - mask_rect.x);
+    mask_rect.height = std::min(mask_rect.height, reader.height() - mask_rect.y);
+
+    // NS inpaint radius: proportional to bbox height, clamped [3, 8].
+    // (Validated at radius 4 for 720p marks; scales modestly for larger marks.)
+    const int inpaint_radius = std::clamp(mask_rect.height / 4, 3, 8);
+
+    // Precompute the inpaint mask once (bbox region, dilated ~2px to cover the
+    // semi-transparent mark's anti-aliased fringe) and reuse it for every frame.
+    cv::Mat mask = cv::Mat::zeros(reader.height(), reader.width(), CV_8UC1);
+    mask(mask_rect).setTo(255);
+    cv::dilate(mask, mask, cv::Mat::ones(5, 5, CV_8U), cv::Point(-1, -1), 1);
+
+    // Process frames
+    cv::Mat frame;
+    int64_t frame_idx = 0;
+    int64_t last_progress_frame = 0;
+    auto t_last_progress = t_start;
+
+    while (reader.next_frame(frame)) {
+        if (frame.empty()) {
+            spdlog::warn("Frame {}: empty, skipping", frame_idx);
+            writer.write_frame(frame);
+            ++result.frames_skipped;
+            ++frame_idx;
+            continue;
+        }
+
+        if (frame.cols != reader.width() || frame.rows != reader.height()) {
+            spdlog::warn("Frame {}: unexpected dimensions {}x{}, skipping",
+                         frame_idx, frame.cols, frame.rows);
+            ++result.frames_skipped;
+            ++frame_idx;
+            continue;
+        }
+
+        // Apply NS inpaint (mask precomputed above the loop)
+        cv::Mat inpainted;
+        cv::inpaint(frame, mask, inpainted, inpaint_radius, cv::INPAINT_NS);
+        frame = inpainted;
+
+        writer.write_frame(frame);
+        ++result.frames_processed;
+
+        // Progress output
+        ++frame_idx;
+        auto t_now = std::chrono::steady_clock::now();
+        double since_last = std::chrono::duration<double>(t_now - t_last_progress).count();
+
+        if (frame_idx - last_progress_frame >= kProgressIntervalFrames ||
+            since_last >= 2.0) {
+            double elapsed = std::chrono::duration<double>(t_now - t_start).count();
+            double proc_fps = static_cast<double>(frame_idx) / std::max(elapsed, 1e-9);
+            int64_t remaining = reader.frame_count() - frame_idx;
+            double eta = (remaining > 0) ? (static_cast<double>(remaining) / proc_fps) : 0.0;
+
+            spdlog::info("Frame {}/{} ({:.1f} fps, ETA {:.0f}s)",
+                         frame_idx, reader.frame_count(), proc_fps, eta);
+
+            last_progress_frame = frame_idx;
+            t_last_progress = t_now;
+        }
+    }
+
+    // Copy audio
+    if (!writer.copy_audio()) {
+        spdlog::warn("Audio copy failed or no audio stream present");
+    }
+
+    writer.close();
+    reader.close();
+
+    // Build result
+    const auto t_end = std::chrono::steady_clock::now();
+    result.elapsed_seconds = std::chrono::duration<double>(t_end - t_start).count();
+    result.detection_confidence = det.confidence;
+    result.success = true;
+    result.message = fmt::format("NotebookLM: processed {} frames ({} skipped) in {:.1f}s",
+                                 result.frames_processed, result.frames_skipped,
+                                 result.elapsed_seconds);
+
+    spdlog::info("Done: {} processed, {} skipped, elapsed={:.1f}s",
+                 result.frames_processed, result.frames_skipped,
+                 result.elapsed_seconds);
 
     return result;
 }

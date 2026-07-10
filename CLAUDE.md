@@ -92,6 +92,15 @@ Both operate in the frequency domain via `FftContext` (FFTW3 wrapper with plan c
 - `-o` specifies output directory (defaults to `<input>_scenes/`); rejects file paths
 - Output naming: `<stem>_<NNN>.mp4` with dynamic zero-padding
 
+### NotebookLM Video Watermark (opt-in via `--notebooklm`)
+
+`NotebookLMDetector` (video/notebooklm_detector.cpp) + `VideoProcessor::process_notebooklm` — removes the NotebookLM rainbow logo + "NotebookLM" wordmark from generated videos (cinematic / explainer / short-portrait exports).
+
+- **Why a separate path**: the NotebookLM mark is semi-transparent, color-adaptive (light-on-dark / dark-on-light, scene-dependent), and H.264-compressed — NOT a reversible constant-alpha overlay. So reverse alpha-blend (Gemini/Veo) does not apply; removal is per-frame NS `cv::inpaint` over the detected bbox (dilated, mask precomputed once), reusing `src/core/inpaint`.
+- **Detection**: template matching — multi-scale `|TM_CCOEFF_NORMED|` against each of ~12 sampled frames, keep the highest-scoring (polarity-invariant; robust across scene cuts — a temporal-median-contrast approach was tried first and failed on multi-scene content). Template = embedded `notebooklm_mark_png` (98×14 grayscale, `assets/embedded_assets.hpp`). The detected bbox snaps to user-measured exact coordinates per known export mode (`kKnownModes`); unknown resolutions use the raw detection. Min confidence 0.45.
+- **CLI**: `wmr video in.mp4 -o out.mp4 --notebooklm` (auto-detect); `--rect x,y,w,h` manual override (any video). Config: `VideoWatermarkConfig::notebooklm_rect`.
+- **Known limitation**: on complex/textured backgrounds (explainer mode) spatial inpaint fabricates the region from its boundary — usable, not perfect. Temporal reverse-alpha (recover true bg via per-pixel α estimation) is the planned follow-up.
+
 ### CLI
 
 CLI11 subcommands in src/cli/: `remove` (default), `visible`, `synthid`, `detect`, `video`, `build-codebook`. Directory inputs to remove/visible/synthid trigger batch mode (sequential, outputs to `cleaned/` subdirectory).

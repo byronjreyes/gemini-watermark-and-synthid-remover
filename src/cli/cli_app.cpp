@@ -16,6 +16,7 @@
 #include <fmt/format.h>
 #include <filesystem>
 #include <iostream>
+#include <sstream>
 
 #ifndef APP_VERSION
 #define APP_VERSION "1.1.0"
@@ -292,8 +293,29 @@ static int process_build_codebook(const CliOptions& opts) {
 
 static int process_video(const CliOptions& opts) {
     VideoWatermarkConfig config;
-    config.profile = opts.legacy_profile ? VideoProfile::VeoLegacy
-                                          : VideoProfile::GeminiDiamond;
+
+    // Resolve video profile
+    if (opts.notebooklm_profile) {
+        config.profile = VideoProfile::NotebookLM;
+    } else {
+        config.profile = opts.legacy_profile ? VideoProfile::VeoLegacy
+                                              : VideoProfile::GeminiDiamond;
+    }
+
+    // Parse --rect x,y,w,h for NotebookLM manual override
+    if (!opts.notebooklm_rect_str.empty()) {
+        int x, y, w, h;
+        char sep1, sep2, sep3;
+        std::istringstream ss(opts.notebooklm_rect_str);
+        if (ss >> x >> sep1 >> y >> sep2 >> w >> sep3 >> h &&
+            sep1 == ',' && sep2 == ',' && sep3 == ',' &&
+            x >= 0 && y >= 0 && w > 0 && h > 0) {
+            config.notebooklm_rect = cv::Rect(x, y, w, h);
+        } else {
+            spdlog::error("Invalid --rect format. Expected: x,y,w,h (e.g. --rect 1145,689,121,17)");
+            return 1;
+        }
+    }
 
     // Parse variant string
     if (opts.video_variant_str == "720p-1") {
@@ -483,6 +505,10 @@ int run_cli(int argc, char* argv[]) {
     video_cmd->add_option("-o,--output", opts.output_path, "Output path (default: <input>_clean.mp4)");
     video_cmd->add_flag("--legacy", opts.legacy_profile,
                          "Use Veo legacy text profile");
+    video_cmd->add_flag("--notebooklm", opts.notebooklm_profile,
+                         "Remove NotebookLM watermark (temporal detection + NS inpaint)");
+    video_cmd->add_option("--rect", opts.notebooklm_rect_str,
+                           "Manual watermark rect x,y,w,h (for --notebooklm auto-detect fallback)");
     video_cmd->add_option("--variant", opts.video_variant_str,
                            "Force geometry: 720p-1, 720p-2, 1080p");
     video_cmd->add_flag("-f,--force", opts.force, "Skip detection");
