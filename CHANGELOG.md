@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.7.1] - 2026-07-11
+
+### NotebookLM: inpaint every scene (presence gate removed)
+
+The per-scene presence gate (template-match the mark per scene, skip "absent" ones) false-negatived: on Arcade Anxiety, scenes 15 and 18 were skipped even though the watermark was visibly present, leaving it in the output. Measured with the real embedded template, a faint-but-**present** mark scores 0.34–0.43 — the **same band as a genuinely-absent scene** (0.37–0.42) — so no threshold can separate them.
+
+- **Fix:** inpaint **every** scene. A false negative = a visible watermark (unacceptable); a false positive = inpainting an already-clean ~121×17 patch (imperceptible — FSR/NS just reconstructs the background). Verified on Arcade: 0 skipped, all 42 scenes inpainted; previously-skipped scenes 15 (clean) and 18 (soft on a complexity-125 cartoon — the documented Phase-B limit) now have the watermark removed.
+- **Removed** the dead presence-gate code: `NotebookLMDetector::mark_present_in_scene`, `sample_scene_frames`, and the `notebooklm_presence_threshold` config field. The complexity gate still routes FSR vs NS.
+
 ## [1.7.0] - 2026-07-11
 
 ### NotebookLM FSR inpaint for intricate backgrounds (kills the NS diamond)

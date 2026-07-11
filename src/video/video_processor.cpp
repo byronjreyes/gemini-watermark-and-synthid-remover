@@ -738,37 +738,28 @@ VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
     }
     spdlog::info("NotebookLM: {} scene(s)", scenes.size());
 
-    // 4. Per-scene analysis: presence + complexity (separate temp reader so the
-    //    main decode reader stays pristine). NotebookLM writes ONE file, so this
-    //    loop is for inpaint dispatch only — not file splitting.
-    struct SceneVerdict { bool present; float complexity; float conf; };
-    std::vector<SceneVerdict> verdicts(scenes.size());
+    // 4. Per-scene complexity (separate temp reader so the main decode reader
+    //    stays pristine). Every scene is inpainted — template-matching presence
+    //    is unreliable for this semi-transparent, color-adaptive mark (a
+    //    faint-but-present mark scores the same ~0.34-0.43 as a genuinely-absent
+    //    scene), so skipping risked leaving a visible watermark. Inpainting an
+    //    already-clean patch is imperceptible. The complexity score only routes
+    //    FSR vs NS.
+    std::vector<float> scene_complexity(scenes.size(), 0.0f);
     {
         VideoReader areader;
-        bool analysis_ok = areader.open(input_path);
+        const bool analysis_ok = areader.open(input_path);
         if (!analysis_ok) {
-            spdlog::warn("NotebookLM: analysis reader failed; treating all scenes as present");
+            spdlog::warn("NotebookLM: analysis reader failed; treating all scenes as uniform (NS)");
         }
-        const float presence_thr = static_cast<float>(config.notebooklm_presence_threshold);
         for (size_t i = 0; i < scenes.size(); ++i) {
-            float conf = 0.0f;
-            bool present = analysis_ok &&
-                detector.mark_present_in_scene(areader, scenes[i].start_frame,
-                                                scenes[i].end_frame, presence_thr, conf);
-            float complexity = analysis_ok
+            scene_complexity[i] = analysis_ok
                 ? detector.background_complexity(areader, scenes[i].start_frame,
                                                  scenes[i].end_frame, det.bbox)
                 : 0.0f;
-            verdicts[i] = {present, complexity, conf};
-            // We do NOT skip faint-confidence scenes. The semi-transparent,
-            // color-adaptive mark scores ~0.34-0.43 BOTH when present-but-faint
-            // AND when genuinely absent, so template matching cannot separate the
-            // two — skipping risks leaving a visible watermark (false negative).
-            // Always inpaint; inpainting a genuinely-absent patch is imperceptible.
-            spdlog::info("NotebookLM scene {}/{}: frames[{},{}] mark-conf={:.2f} "
-                         "complexity={:.1f} -> inpaint",
+            spdlog::info("NotebookLM scene {}/{}: frames[{},{}] complexity={:.1f}",
                          i + 1, scenes.size(), scenes[i].start_frame, scenes[i].end_frame,
-                         conf, complexity);
+                         scene_complexity[i]);
         }
     }
 
@@ -787,7 +778,7 @@ VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
     bool warned_no_xphoto = false;
     for (size_t i = 0; i < scenes.size(); ++i) {
         scene_method[i] = resolve_inpaint_method(
-            verdicts[i].complexity, config.notebooklm_complexity_threshold,
+            scene_complexity[i], config.notebooklm_complexity_threshold,
             config.notebooklm_method, has_xphoto);
         if (!has_xphoto && config.notebooklm_method != "ns" && scene_method[i] == "ns"
             && !warned_no_xphoto) {
@@ -796,7 +787,7 @@ VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
             warned_no_xphoto = true;
         }
         spdlog::info("NotebookLM scene {}/{}: complexity={:.1f} -> inpaint({})",
-                     i + 1, scenes.size(), verdicts[i].complexity, scene_method[i]);
+                     i + 1, scenes.size(), scene_complexity[i], scene_method[i]);
     }
 
     // 5. Open output writer.

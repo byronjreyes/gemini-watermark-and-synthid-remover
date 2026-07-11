@@ -32,16 +32,10 @@ public:
     NotebookLMDetection detect(const std::string& input_path,
                                std::optional<cv::Rect> manual_rect = std::nullopt);
 
-    // Per-scene presence gate: sample frames in [start, end) and test whether
-    // the mark is present (template match confidence >= thr). Returns false +
-    // best_conf_out < thr when the mark is absent (so the caller can skip
-    // inpainting that scene). Uses the embedded mark template.
-    bool mark_present_in_scene(VideoReader& reader, int64_t start, int64_t end,
-                               float thr, float& best_conf_out);
-
     // Per-scene background complexity: sample a frame near the middle of
     // [start, end) and return the gradient-energy complexity score around the
     // mark (delegates to background_complexity_score in notebooklm_gates).
+    // Used to route the inpaint method (intricate -> FSR, uniform -> NS).
     float background_complexity(VideoReader& reader, int64_t start, int64_t end,
                                 const cv::Rect& mark_rect);
 };
