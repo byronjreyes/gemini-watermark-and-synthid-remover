@@ -760,11 +760,15 @@ VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
                                                  scenes[i].end_frame, det.bbox)
                 : 0.0f;
             verdicts[i] = {present, complexity, conf};
-            spdlog::info("NotebookLM scene {}/{}: frames[{},{}] present={} conf={:.2f} "
-                         "complexity={:.1f} -> {}",
+            // We do NOT skip faint-confidence scenes. The semi-transparent,
+            // color-adaptive mark scores ~0.34-0.43 BOTH when present-but-faint
+            // AND when genuinely absent, so template matching cannot separate the
+            // two — skipping risks leaving a visible watermark (false negative).
+            // Always inpaint; inpainting a genuinely-absent patch is imperceptible.
+            spdlog::info("NotebookLM scene {}/{}: frames[{},{}] mark-conf={:.2f} "
+                         "complexity={:.1f} -> inpaint",
                          i + 1, scenes.size(), scenes[i].start_frame, scenes[i].end_frame,
-                         present, conf, complexity,
-                         present ? "inpaint" : "skip");
+                         conf, complexity);
         }
     }
 
@@ -782,10 +786,6 @@ VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
     std::vector<std::string> scene_method(scenes.size());
     bool warned_no_xphoto = false;
     for (size_t i = 0; i < scenes.size(); ++i) {
-        if (!verdicts[i].present) {
-            scene_method[i] = "ns";  // unused: absent-mark scenes are written through
-            continue;
-        }
         scene_method[i] = resolve_inpaint_method(
             verdicts[i].complexity, config.notebooklm_complexity_threshold,
             config.notebooklm_method, has_xphoto);
@@ -824,7 +824,6 @@ VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
     int64_t frame_idx = 0;
     int64_t last_progress_frame = 0;
     int64_t frames_inpainted = 0;
-    int64_t frames_passthrough = 0;
     size_t cur_scene = 0;
     auto t_last_progress = t_start;
 
@@ -833,8 +832,6 @@ VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
         while (cur_scene + 1 < scenes.size() && frame_idx >= scenes[cur_scene].end_frame) {
             ++cur_scene;
         }
-        const bool present = verdicts[cur_scene].present;
-
         if (frame.empty()) {
             spdlog::warn("Frame {}: empty, skipping", frame_idx);
             writer.write_frame(frame);
@@ -850,12 +847,10 @@ VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
             continue;
         }
 
-        if (present) {
-            inpaint_mark_roi(frame, mask_rect, inpaint_radius, scene_method[cur_scene]);
-            ++frames_inpainted;
-        } else {
-            ++frames_passthrough;  // absent-mark scene: write through unmodified
-        }
+        // Every scene is inpainted (presence detection is unreliable for this
+        // semi-transparent mark — see the analysis-pass note above).
+        inpaint_mark_roi(frame, mask_rect, inpaint_radius, scene_method[cur_scene]);
+        ++frames_inpainted;
         writer.write_frame(frame);
         ++result.frames_processed;
 
@@ -885,14 +880,12 @@ VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
     result.elapsed_seconds = std::chrono::duration<double>(t_end - t_start).count();
     result.detection_confidence = det.confidence;
     result.success = true;
-    result.message = fmt::format("NotebookLM: {} frames ({} inpainted, {} passthrough, "
-                                 "{} skipped) in {:.1f}s",
+    result.message = fmt::format("NotebookLM: {} frames ({} inpainted, {} skipped) "
+                                 "in {:.1f}s",
                                  result.frames_processed, frames_inpainted,
-                                 frames_passthrough, result.frames_skipped,
-                                 result.elapsed_seconds);
-    spdlog::info("Done: {} processed ({} inpainted, {} passthrough, {} skipped), "
-                 "elapsed={:.1f}s",
-                 result.frames_processed, frames_inpainted, frames_passthrough,
+                                 result.frames_skipped, result.elapsed_seconds);
+    spdlog::info("Done: {} processed ({} inpainted, {} skipped), elapsed={:.1f}s",
+                 result.frames_processed, frames_inpainted,
                  result.frames_skipped, result.elapsed_seconds);
     return result;
 }
