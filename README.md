@@ -11,28 +11,30 @@ A C++20 CLI tool for removing visible and invisible watermarks from images and v
 |-----------|------|-------|--------|
 | Gemini sparkle logo | Alpha-blended overlay | Gemini-generated images | Implemented |
 | Veo video watermark | Alpha-blended text overlay | Veo-generated videos | Implemented |
-| NotebookLM video watermark | Semi-transparent logo + wordmark | NotebookLM-generated videos | Implemented (per-scene NS inpaint) |
+| NotebookLM video watermark | Semi-transparent logo + wordmark | NotebookLM-generated videos | Implemented (per-scene FSR/NS inpaint) |
 | SynthID invisible | Spectral embedding | Gemini-generated images | Partial (uniform images) |
 
 ## Quick Start
 
 ### Download
 
-Prebuilt binaries for every release are on the [Releases page](https://github.com/froggeric/gemini-watermark-and-synthid-remover/releases) — no build step required:
+Prebuilt binaries for every release are on the [Releases page](https://github.com/froggeric/gemini-watermark-and-synthid-remover/releases) — no build step required. As of v1.7.0 **every asset is a single self-contained package** that ships the FDnCNN AI denoise + FSR inpaint; there is no lean/full split.
 
 | Asset | Platform | Notes |
 |-------|----------|-------|
-| `wmr-macos-arm64`, `wmr-macos-x86_64` | macOS | Lean, AI-free, self-contained |
-| `wmr-linux-x86_64` | Linux | Lean, AI-free, self-contained |
-| `wmr-windows-x86_64.exe` | Windows | Lean, AI-free, self-contained |
-| `wmr-macos-arm64-ai.tar.gz` | macOS arm64 | FDnCNN AI denoise + bundled Vulkan/MoltenVK (GPU); see [AI Denoise](#ai-denoise-optional) |
+| `wmr-macos-arm64.tar.gz` | macOS arm64 | Bundled Vulkan/MoltenVK → GPU AI denoise out of the box. Extract and run `./wmr`. |
+| `wmr-macos-x86_64` | macOS Intel | Cross-compiled; AI runs on CPU (GPU if you install the Vulkan SDK). |
+| `wmr-linux-x86_64` | Linux | Self-contained; GPU AI when a Vulkan loader is present, else CPU. |
+| `wmr-windows-x86_64.exe` | Windows | Self-contained; GPU AI when `vulkan-1.dll` is present, else CPU. |
 
 ```bash
-chmod +x wmr-macos-arm64        # macOS/Linux single binary
-./wmr-macos-arm64 --version
+# macOS arm64 (tarball with bundled GPU driver)
+tar xzf wmr-macos-arm64.tar.gz && cd wmr-macos-arm64 && ./wmr --version
+# Linux / Windows / macOS Intel (single binary)
+chmod +x wmr-linux-x86_64 && ./wmr-linux-x86_64 --version
 ```
 
-The lean builds are single self-contained executables. The AI build ships as a tarball (`wmr` launcher + `wmr.bin` + `lib/`) — extract it and run `./wmr` (see [AI Denoise](#ai-denoise-optional)). On macOS, clear Gatekeeper's quarantine if prompted: `xattr -dr com.apple.quarantine <file-or-dir>`.
+On macOS, clear Gatekeeper's quarantine if prompted: `xattr -dr com.apple.quarantine <file-or-dir>`. Third-party licenses ship in `LICENSE-THIRD-PARTY.md`.
 
 ### Build
 
@@ -107,7 +109,7 @@ wmr remove input_dir/ -o output_dir/ --recursive
 | `--legacy` | video | Use Veo legacy text profile |
 | `--notebooklm` | video | Remove the NotebookLM logo + wordmark (per-scene adaptive dispatch) |
 | `--rect` | video | Manual watermark rect `x,y,w,h` (NotebookLM auto-detect fallback) |
-| `--notebooklm-method` | video | Inpaint method: `ns` (default) \| `shiftmap` \| `lama` |
+| `--notebooklm-method` | video | NotebookLM inpaint method: `auto` (default) \| `ns` \| `fsr` |
 | `--complexity-threshold` | video | Background-complexity floor to treat as intricate (default 15.0) |
 | `--variant` | video | Force geometry: 720p-1, 720p-2, 1080p |
 | `--scenes` | video | Split video into separate files at scene boundaries |
@@ -200,7 +202,7 @@ Video processing uses pure reverse alpha blending — the same lossless method a
 
 Supports both Gemini (diamond) and Veo (text) video watermarks via `--legacy` flag.
 
-**NotebookLM** video watermarks (the rainbow logo + "NotebookLM" wordmark) use a separate path. The mark is semi-transparent and color-adaptive (not a reversible alpha overlay), so removal uses Navier-Stokes inpainting after template-based auto-detection of the bottom-right mark. Processing is **per-scene**: scenes where the mark is absent are left untouched, and a background-complexity gate classifies each scene (uniform vs intricate) for method selection.
+**NotebookLM** video watermarks (the rainbow logo + "NotebookLM" wordmark) use a separate path. The mark is semi-transparent and color-adaptive (not a reversible alpha overlay), so removal uses spatial inpainting after template-based auto-detection of the bottom-right mark. Processing is **per-scene**: scenes where the mark is absent are left untouched, and a background-complexity gate picks the method per scene — **FSR** (`cv::xphoto`) for intricate/textured backgrounds (kills the diamond PDE artifact NS leaves behind) and **Navier-Stokes** for uniform backgrounds.
 
 - Works across cinematic, explainer, and short-portrait exports; detection is polarity-invariant (light-on-dark or dark-on-light) and robust across scene cuts.
 - If auto-detection misses the mark, specify the region manually with `--rect x,y,w,h` (measure it in a graphics editor on a full frame — see the `*_FRAME.png` reference frames).
@@ -244,9 +246,9 @@ SynthID invisible watermarks are embedded via a neural encoder in the frequency 
 
 **Limitations:** Both approaches are effective on uniform/dark images where the carrier signal is dominant. On content-rich images, the carrier energy is <0.1% of total spectral energy, making reliable removal difficult.
 
-### AI Denoise (optional)
+### AI Denoise
 
-An optional FDnCNN denoiser (NCNN + Vulkan, with CPU fallback) can replace the hand-crafted Gaussian/TELEA/NS cleanup as a learned residual-cleanup method after reverse alpha blending. It is **OFF by default**; the standard build is lean and AI-free.
+An FDnCNN denoiser (NCNN + Vulkan, with CPU fallback) replaces the hand-crafted Gaussian/TELEA/NS cleanup as a learned residual-cleanup method after reverse alpha blending. **Every release binary ships it** (v1.7.0+); source/dev builds still gate it behind `WMR_BUILD_AI_DENOISE` (OFF by default for a fast lean dev build).
 
 ```bash
 # Build with AI (macOS/Homebrew): needs the Vulkan loader + MoltenVK
@@ -277,17 +279,17 @@ wmr remove input.png --sigma 75 --strength 150 -o out.png   # tune
 | `--strength` | 0–300 % | 120 | Cleanup strength (`/100` internally) |
 | `--radius` | 1–25 | 10 | Gaussian/TELEA/NS radius |
 
-These flags are only present when built with `WMR_BUILD_AI_DENOISE=ON`; the lean build exposes only `--inpaint-strength`.
+In release binaries (v1.7.0+) these flags are always present. A source build without `WMR_BUILD_AI_DENOISE=ON` exposes only `--inpaint-strength`.
 
-**Release binaries:** the default release ships lean, AI-free binaries (`wmr-macos-arm64`, `wmr-macos-x86_64`, `wmr-linux-x86_64`, `wmr-windows-x86_64.exe`) — single self-contained executables. A separate **`wmr-macos-arm64-ai.tar.gz`** (macOS arm64) bundles the AI denoiser *and* the Vulkan loader (`libvulkan`) + MoltenVK, so it runs on a clean macOS install with no Vulkan SDK, Homebrew, or MoltenVK installed — the Metal GPU driver ships with it. Extract and run the `wmr` launcher:
+**Release binaries (v1.7.0+):** every asset is one self-contained package with the AI denoiser built in (see [Download](#download)). The macOS arm64 build additionally bundles the Vulkan loader (`libvulkan`) + MoltenVK (`libMoltenVK`) next to the binary via a `wmr` launcher, so it runs on a clean macOS install with out-of-the-box GPU — no Vulkan SDK, Homebrew, or MoltenVK needed:
 
 ```bash
-tar xzf wmr-macos-arm64-ai.tar.gz
-cd wmr-macos-arm64-ai
+tar xzf wmr-macos-arm64.tar.gz
+cd wmr-macos-arm64
 ./wmr remove input.png --denoise ai -o out.png    # GPU via bundled MoltenVK; CPU fallback if no Metal
 ```
 
-The `wmr` launcher points the Vulkan loader at the bundled ICD manifest (`VK_ICD_FILENAMES`) then `exec`s the real binary (`wmr.bin`); the Vulkan loader (`libvulkan`), MoltenVK (`libMoltenVK`), and ICD manifest ship in the tarball's `lib/`. A pre-set `VK_ICD_FILENAMES` is respected (override the ICD, or set it to a nonexistent path to force CPU). macOS Gatekeeper may quarantine the ad-hoc-signed binary on first run — if so, clear it: `xattr -dr com.apple.quarantine wmr-macos-arm64-ai`. Third-party licenses: `LICENSE-AI.md` (NCNN, volk, KAIR/FDnCNN).
+The `wmr` launcher points the Vulkan loader at the bundled ICD manifest (`VK_ICD_FILENAMES`) then `exec`s the real binary (`wmr.bin`); the Vulkan loader, MoltenVK, and ICD manifest ship in the tarball's `lib/`. A pre-set `VK_ICD_FILENAMES` is respected (override the ICD, or set it to a nonexistent path to force CPU). The macOS Intel, Linux, and Windows builds use NCNN's runtime Vulkan loader (`simplevk`) — GPU when a Vulkan loader is present, else CPU. macOS Gatekeeper may quarantine the ad-hoc-signed arm64 binary on first run — clear it: `xattr -dr com.apple.quarantine wmr-macos-arm64`. Third-party licenses: `LICENSE-THIRD-PARTY.md` (NCNN, volk, KAIR/FDnCNN, OpenCV/xphoto).
 
 ## Dependencies
 

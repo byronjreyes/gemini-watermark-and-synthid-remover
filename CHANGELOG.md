@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.7.0] - 2026-07-11
+
+### NotebookLM FSR inpaint for intricate backgrounds (kills the NS diamond)
+
+Phase B of the NotebookLM quality roadmap. v1.6.0's NS inpaint left a diamond/envelope PDE artifact on every non-uniform background (intensity propagates from the 4 mask edges, peaks on the diagonals). 1.7.0 routes intricate-background scenes to **FSR** (`cv::xphoto`), which blends cleanly.
+
+- **Per-scene method routing** — `resolve_inpaint_method` (new, pure, unit-tested in `notebooklm_gates`): `auto` (new default) picks FSR for intricate scenes (complexity ≥ `--complexity-threshold`, default 15.0) and NS for uniform ones; `--notebooklm-method {ns|fsr}` forces a method. The v1.6.0 complexity gate was computed but **never wired to dispatch**; this builds the routing (per-scene resolved method threaded into the frame loop).
+- **FSR, not NS, for texture** — A/B confirmed FSR removes the diamond and continues the surrounding texture; NS is local (a PDE method) and cannot. SHIFTMAP is dropped (copy-paste artifact).
+- **`INPAINT_FSR_FAST`, not `_BEST`** — benchmarked on the ~131×16 mark crop, FSR_BEST is ~1.3 s/frame (endless DCT iterations, infeasible for video) vs FSR_FAST ~64 ms/frame (20× faster) with near-identical quality on a hole this small. Full Neon (9014 frames) processes in ~6 min.
+- **Context-aware ROI padding** — FSR reconstructs the hole from the surrounding texture, so it gets a generous 30 px context crop (`kFsrContextPad`); NS keeps the lean `radius+4` crop (it only uses the mask edge, and runs on uniform backgrounds where the diamond is negligible).
+- **`WMR_HAS_XPHOTO` guard** — `if(TARGET opencv_xphoto)` links `opencv_xphoto` when the OpenCV build includes contrib (Homebrew yes; vcpkg `contrib` feature). Without xphoto, `auto` collapses to NS for every scene — bit-identical to v1.6.0 (no regression); a one-time warning fires if FSR is explicitly requested.
+
+#### Changed
+- **Behavior change:** `--notebooklm-method` default `ns` → `auto` (FSR on intricate backgrounds). Choices `{auto|ns|fsr}` with `CLI::IsMember` validation (was silently accepting any string); SHIFTMAP/LaMa dropped from the choice set.
+- `vcpkg.json`: `opencv4` += `contrib` (xphoto/FSR; monolithic but only `opencv_xphoto` links into the binary).
+- 7 new `resolve_inpaint_method` unit cases (34 total).
+
+#### Note
+FSR is a **partial** fix — it kills the diamond and blends far better than NS, but the fill is still softly blurred on the most intricate backgrounds. True quality (LaMa, ~2.4 s/frame CPU → infeasible as a video default) is reserved for Phase C (optional opt-in).
+
+### Single full-package release per platform
+
+The 4 lean binaries + separate macOS AI tarball are replaced by **one self-contained package per (OS, arch)**, each shipping the FDnCNN AI denoise (NCNN+Vulkan) + FSR. No more lean/full split.
+
+- **`release.yml` 4-leg matrix:** macOS arm64 (native + bundled Vulkan loader/MoltenVK → out-of-the-box GPU), macOS x86_64 (**cross-compiled** on the arm64 runner via `x64-osx` + Rosetta — the old `wmr-macos-x86_64` was arm64-mislabeled, and the only Intel runner `macos-13` was retired), Linux, Windows. `WMR_BUILD_AI_DENOISE=ON` + recursive submodules + `ai-denoise` vcpkg feature on every leg; CPU denoise smoke on all.
+- **Vulkan handling:** macOS arm64 bundles the loader + MoltenVK (no system Vulkan); macOS x86_64, Linux, Windows rely on NCNN's `simplevk` runtime `dlopen` (system `vulkan-1.dll`/`libvulkan.so.1` if present, else graceful CPU fallback) — **no Vulkan SDK at build time** on those platforms.
+- **New `tests` CI job** (ubuntu, `WMR_BUILD_AI_DENOISE=ON + WMR_BUILD_TESTS=ON`) restores AI + routing test coverage the dev-default-OFF / release-TESTS-OFF gap previously dropped.
+- `release` attaches 4 assets + `LICENSE-THIRD-PARTY.md`; the standalone `ai-denoise` job is removed (folded into the matrix + `tests`).
+
+#### Changed
+- `LICENSE-AI.md` → `LICENSE-THIRD-PARTY.md` — now accompanies **every** release binary (not just the retired AI tarball); broadened + added the OpenCV / opencv_contrib / xphoto Apache-2.0 notice. NCNN (BSD-3), volk (MIT), KAIR/FDnCNN (MIT) unchanged.
+
 ## [1.6.0] - 2026-07-11
 
 ### NotebookLM adaptive per-scene inpaint dispatch
