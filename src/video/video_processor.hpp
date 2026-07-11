@@ -20,6 +20,10 @@ struct VideoWatermarkConfig {
     bool scenes = false;
     std::optional<cv::Rect> notebooklm_rect;  // --rect x,y,w,h override
     double scene_threshold = 0.4;
+    // NotebookLM adaptive dispatch (Phase A):
+    std::string notebooklm_method = "ns";          // --notebooklm-method {ns|shiftmap|lama}
+    double notebooklm_complexity_threshold = 15.0; // --complexity-threshold (intricate if score >= this)
+    double notebooklm_presence_threshold = 0.45;   // mark-present confidence floor per scene
 };
 
 struct VideoResult {
@@ -65,7 +69,7 @@ private:
 
     WatermarkSize geometry_to_size(const WatermarkPosition& geo) const;
 
-    // NotebookLM path: detect + NS inpaint
+    // NotebookLM path: per-scene adaptive dispatch (presence + complexity gates)
     VideoResult process_notebooklm(const std::string& input_path,
                                     const std::string& output_path,
                                     const VideoWatermarkConfig& config,

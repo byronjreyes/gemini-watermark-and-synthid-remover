@@ -11,7 +11,7 @@ A C++20 CLI tool for removing visible and invisible watermarks from images and v
 |-----------|------|-------|--------|
 | Gemini sparkle logo | Alpha-blended overlay | Gemini-generated images | Implemented |
 | Veo video watermark | Alpha-blended text overlay | Veo-generated videos | Implemented |
-| NotebookLM video watermark | Semi-transparent logo + wordmark | NotebookLM-generated videos | Implemented (NS inpaint) |
+| NotebookLM video watermark | Semi-transparent logo + wordmark | NotebookLM-generated videos | Implemented (per-scene NS inpaint) |
 | SynthID invisible | Spectral embedding | Gemini-generated images | Partial (uniform images) |
 
 ## Quick Start
@@ -105,8 +105,10 @@ wmr remove input_dir/ -o output_dir/ --recursive
 | `--preset` | video | Encode preset (default slow) |
 | `--codec` | video | Video codec (default libx264) |
 | `--legacy` | video | Use Veo legacy text profile |
-| `--notebooklm` | video | Remove the NotebookLM logo + wordmark (auto-detected, NS inpaint) |
+| `--notebooklm` | video | Remove the NotebookLM logo + wordmark (per-scene adaptive dispatch) |
 | `--rect` | video | Manual watermark rect `x,y,w,h` (NotebookLM auto-detect fallback) |
+| `--notebooklm-method` | video | Inpaint method: `ns` (default) \| `shiftmap` \| `lama` |
+| `--complexity-threshold` | video | Background-complexity floor to treat as intricate (default 15.0) |
 | `--variant` | video | Force geometry: 720p-1, 720p-2, 1080p |
 | `--scenes` | video | Split video into separate files at scene boundaries |
 | `--scene-threshold` | video | Scene cut sensitivity 0.0-1.0 (default 0.3) |
@@ -198,7 +200,7 @@ Video processing uses pure reverse alpha blending — the same lossless method a
 
 Supports both Gemini (diamond) and Veo (text) video watermarks via `--legacy` flag.
 
-**NotebookLM** video watermarks (the rainbow logo + "NotebookLM" wordmark) use a separate path. The mark is semi-transparent and color-adaptive (not a reversible alpha overlay), so removal uses per-frame Navier-Stokes inpainting after template-based auto-detection of the bottom-right mark.
+**NotebookLM** video watermarks (the rainbow logo + "NotebookLM" wordmark) use a separate path. The mark is semi-transparent and color-adaptive (not a reversible alpha overlay), so removal uses Navier-Stokes inpainting after template-based auto-detection of the bottom-right mark. Processing is **per-scene**: scenes where the mark is absent are left untouched, and a background-complexity gate classifies each scene (uniform vs intricate) for method selection.
 
 - Works across cinematic, explainer, and short-portrait exports; detection is polarity-invariant (light-on-dark or dark-on-light) and robust across scene cuts.
 - If auto-detection misses the mark, specify the region manually with `--rect x,y,w,h` (measure it in a graphics editor on a full frame — see the `*_FRAME.png` reference frames).

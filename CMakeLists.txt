@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(wmr VERSION 1.5.0 LANGUAGES CXX)
+project(wmr VERSION 1.6.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -25,6 +25,7 @@ set(SOURCES
     src/video/video_processor.cpp
     src/video/scene_detector.cpp
     src/video/notebooklm_detector.cpp
+    src/video/notebooklm_gates.cpp
 )
 
 # Executable

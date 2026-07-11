@@ -8,6 +8,7 @@ set(TEST_SOURCES
     unit/fft_context_test.cpp
     unit/spectral_codebook_test.cpp
     unit/inpaint_test.cpp
+    unit/notebooklm_gates_test.cpp
     integration/visible_pipeline_test.cpp
 )
 
@@ -22,6 +23,7 @@ set(LIB_SOURCES
     ${CMAKE_SOURCE_DIR}/src/synthid/spectral_codebook.cpp
     ${CMAKE_SOURCE_DIR}/src/synthid/codebook_subtractor.cpp
     ${CMAKE_SOURCE_DIR}/src/synthid/codebook_builder.cpp
+    ${CMAKE_SOURCE_DIR}/src/video/notebooklm_gates.cpp  # VideoReader-free (pure OpenCV); safe for the test link
     # NOTE: src/video/scene_detector.cpp is intentionally excluded — it pulls in
     # VideoReader (FFmpeg), which the test target does not link. No test
     # references SceneDetector today; re-add it (with the FFMPEG link) if a

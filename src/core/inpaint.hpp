@@ -7,9 +7,13 @@ namespace wmr {
 enum class InpaintMethod {
     Gaussian,
     Telea,
-    NavierStokes
+    NavierStokes,
+    ShiftMap              // opencv_contrib xphoto INPAINT_SHIFTMAP (Phase B; usable only when WMR_HAS_XPHOTO)
 #ifdef WMR_AI_DENOISE
     , AiDenoise  // FDnCNN NCNN/Vulkan AI denoise (dispatched by WatermarkEngine)
+#endif
+#ifdef WMR_AI_LAMA
+    , LaMa      // LaMa ONNX inpaint (Phase C; dispatched by WatermarkEngine)
 #endif
 };
 

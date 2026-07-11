@@ -631,31 +631,63 @@ VideoResult VideoProcessor::process(const std::string& input_path,
 
 
 // ---------------------------------------------------------------------------
-// NotebookLM processing: detect mark bbox, then per-frame NS inpaint
+// Inpaint the watermark ROI on a single frame. Padded-crop inpaint (faster and
+// a smaller visible area than full-frame cv::inpaint). Method dispatch: Phase A
+// implements NS only; "shiftmap" (Phase B, WMR_HAS_XPHOTO) and "lama" (Phase C,
+// WMR_AI_LAMA) fall back to NS until implemented.
+// ---------------------------------------------------------------------------
+static void inpaint_mark_roi(cv::Mat& frame, const cv::Rect& mark_rect,
+                             int radius, const std::string& method) {
+    const cv::Rect bounds(0, 0, frame.cols, frame.rows);
+    cv::Rect mask = mark_rect & bounds;
+    if (mask.empty()) return;
+    const int pad = radius + 4;
+    cv::Rect roi = (mask + cv::Size(2 * pad, 2 * pad)) - cv::Point(pad, pad);
+    roi &= bounds;
+    if (roi.width <= 0 || roi.height <= 0) return;
+    cv::Rect local = mask - cv::Point(roi.x, roi.y);
+    local &= cv::Rect(0, 0, roi.width, roi.height);
+    if (local.empty()) return;
+
+    cv::Mat crop = frame(roi).clone();
+    cv::Mat lmask = cv::Mat::zeros(crop.size(), CV_8U);
+    lmask(local).setTo(255);
+    cv::dilate(lmask, lmask, cv::Mat::ones(5, 5, CV_8U), cv::Point(-1, -1), 1);
+
+    cv::Mat out;
+    // Phase A: NS only. (shiftmap→Phase B / lama→Phase C branch here later.)
+    (void)method;
+    cv::inpaint(crop, lmask, out, radius, cv::INPAINT_NS);
+    out.copyTo(frame(roi));
+}
+
+// ---------------------------------------------------------------------------
+// NotebookLM processing: per-scene adaptive dispatch.
+//   detect bbox → split into scenes → per-scene presence + complexity gates →
+//   skip absent-mark scenes; NS-inpaint present scenes (ROI crop). Single-file
+//   output (NOT split like the Gemini --scenes branch). Audio copied once.
 // ---------------------------------------------------------------------------
 VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
-                                              const std::string& output_path,
-                                              const VideoWatermarkConfig& config,
-                                              const EncodeOptions& encode_opts)
+                                               const std::string& output_path,
+                                               const VideoWatermarkConfig& config,
+                                               const EncodeOptions& encode_opts)
 {
     VideoResult result;
     const auto t_start = std::chrono::steady_clock::now();
 
-    // Detect the watermark bbox
+    // 1. Detect the watermark bbox (whole-video template match + snap to known).
     NotebookLMDetector detector;
     auto det = detector.detect(input_path, config.notebooklm_rect);
-
     if (!det.found) {
         result.success = false;
         result.message = "NotebookLM watermark not detected (use --rect x,y,w,h to specify manually)";
         spdlog::error("{}", result.message);
         return result;
     }
-
     spdlog::info("NotebookLM watermark bbox: ({},{},{},{})",
                  det.bbox.x, det.bbox.y, det.bbox.width, det.bbox.height);
 
-    // Open input
+    // 2. Open the main reader (used for the decode loop).
     VideoReader reader;
     if (!reader.open(input_path)) {
         result.success = false;
@@ -663,12 +695,49 @@ VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
         spdlog::error("{}", result.message);
         return result;
     }
-
     spdlog::info("Input: {} ({}x{}, {:.2f} fps, {} frames)",
                  input_path, reader.width(), reader.height(),
                  reader.fps(), reader.frame_count());
 
-    // Open output writer
+    // 3. Scene boundaries (SceneDetector opens its own reader; undisturbs main).
+    SceneDetector scene_detector({config.scene_threshold});
+    auto scenes = scene_detector.detect_boundaries(input_path);
+    if (scenes.empty()) {
+        scenes.push_back({0, reader.frame_count()});
+    }
+    spdlog::info("NotebookLM: {} scene(s)", scenes.size());
+
+    // 4. Per-scene analysis: presence + complexity (separate temp reader so the
+    //    main decode reader stays pristine). NotebookLM writes ONE file, so this
+    //    loop is for inpaint dispatch only — not file splitting.
+    struct SceneVerdict { bool present; float complexity; float conf; };
+    std::vector<SceneVerdict> verdicts(scenes.size());
+    {
+        VideoReader areader;
+        bool analysis_ok = areader.open(input_path);
+        if (!analysis_ok) {
+            spdlog::warn("NotebookLM: analysis reader failed; treating all scenes as present");
+        }
+        const float presence_thr = static_cast<float>(config.notebooklm_presence_threshold);
+        for (size_t i = 0; i < scenes.size(); ++i) {
+            float conf = 0.0f;
+            bool present = analysis_ok &&
+                detector.mark_present_in_scene(areader, scenes[i].start_frame,
+                                                scenes[i].end_frame, presence_thr, conf);
+            float complexity = analysis_ok
+                ? detector.background_complexity(areader, scenes[i].start_frame,
+                                                 scenes[i].end_frame, det.bbox)
+                : 0.0f;
+            verdicts[i] = {present, complexity, conf};
+            spdlog::info("NotebookLM scene {}/{}: frames[{},{}] present={} conf={:.2f} "
+                         "complexity={:.1f} -> {}",
+                         i + 1, scenes.size(), scenes[i].start_frame, scenes[i].end_frame,
+                         present, conf, complexity,
+                         present ? "inpaint(NS)" : "skip");
+        }
+    }
+
+    // 5. Open output writer.
     VideoWriter writer;
     if (!writer.open(output_path, reader.width(), reader.height(),
                      reader.fps(), encode_opts, input_path)) {
@@ -679,31 +748,31 @@ VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
         return result;
     }
 
-    // Create binary mask for the watermark bbox (dilated slightly for clean edges)
+    // 6. Inpaint geometry (clamped bbox + radius).
     cv::Rect mask_rect = det.bbox;
-    // Clamp to frame bounds
     mask_rect.x = std::max(0, mask_rect.x);
     mask_rect.y = std::max(0, mask_rect.y);
     mask_rect.width = std::min(mask_rect.width, reader.width() - mask_rect.x);
     mask_rect.height = std::min(mask_rect.height, reader.height() - mask_rect.y);
-
-    // NS inpaint radius: proportional to bbox height, clamped [3, 8].
-    // (Validated at radius 4 for 720p marks; scales modestly for larger marks.)
     const int inpaint_radius = std::clamp(mask_rect.height / 4, 3, 8);
 
-    // Precompute the inpaint mask once (bbox region, dilated ~2px to cover the
-    // semi-transparent mark's anti-aliased fringe) and reuse it for every frame.
-    cv::Mat mask = cv::Mat::zeros(reader.height(), reader.width(), CV_8UC1);
-    mask(mask_rect).setTo(255);
-    cv::dilate(mask, mask, cv::Mat::ones(5, 5, CV_8U), cv::Point(-1, -1), 1);
-
-    // Process frames
+    // 7. Main decode: sequential, single writer, per-scene dispatch.
+    reader.seek(0);
     cv::Mat frame;
     int64_t frame_idx = 0;
     int64_t last_progress_frame = 0;
+    int64_t frames_inpainted = 0;
+    int64_t frames_passthrough = 0;
+    size_t cur_scene = 0;
     auto t_last_progress = t_start;
 
     while (reader.next_frame(frame)) {
+        // Advance to the scene containing frame_idx (scenes are contiguous).
+        while (cur_scene + 1 < scenes.size() && frame_idx >= scenes[cur_scene].end_frame) {
+            ++cur_scene;
+        }
+        const bool present = verdicts[cur_scene].present;
+
         if (frame.empty()) {
             spdlog::warn("Frame {}: empty, skipping", frame_idx);
             writer.write_frame(frame);
@@ -711,7 +780,6 @@ VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
             ++frame_idx;
             continue;
         }
-
         if (frame.cols != reader.width() || frame.rows != reader.height()) {
             spdlog::warn("Frame {}: unexpected dimensions {}x{}, skipping",
                          frame_idx, frame.cols, frame.rows);
@@ -720,55 +788,50 @@ VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
             continue;
         }
 
-        // Apply NS inpaint (mask precomputed above the loop)
-        cv::Mat inpainted;
-        cv::inpaint(frame, mask, inpainted, inpaint_radius, cv::INPAINT_NS);
-        frame = inpainted;
-
+        if (present) {
+            inpaint_mark_roi(frame, mask_rect, inpaint_radius, config.notebooklm_method);
+            ++frames_inpainted;
+        } else {
+            ++frames_passthrough;  // absent-mark scene: write through unmodified
+        }
         writer.write_frame(frame);
         ++result.frames_processed;
 
-        // Progress output
         ++frame_idx;
         auto t_now = std::chrono::steady_clock::now();
         double since_last = std::chrono::duration<double>(t_now - t_last_progress).count();
-
-        if (frame_idx - last_progress_frame >= kProgressIntervalFrames ||
-            since_last >= 2.0) {
+        if (frame_idx - last_progress_frame >= kProgressIntervalFrames || since_last >= 2.0) {
             double elapsed = std::chrono::duration<double>(t_now - t_start).count();
             double proc_fps = static_cast<double>(frame_idx) / std::max(elapsed, 1e-9);
             int64_t remaining = reader.frame_count() - frame_idx;
             double eta = (remaining > 0) ? (static_cast<double>(remaining) / proc_fps) : 0.0;
-
             spdlog::info("Frame {}/{} ({:.1f} fps, ETA {:.0f}s)",
                          frame_idx, reader.frame_count(), proc_fps, eta);
-
             last_progress_frame = frame_idx;
             t_last_progress = t_now;
         }
     }
 
-    // Copy audio
+    // 8. Audio + teardown.
     if (!writer.copy_audio()) {
         spdlog::warn("Audio copy failed or no audio stream present");
     }
-
     writer.close();
     reader.close();
 
-    // Build result
     const auto t_end = std::chrono::steady_clock::now();
     result.elapsed_seconds = std::chrono::duration<double>(t_end - t_start).count();
     result.detection_confidence = det.confidence;
     result.success = true;
-    result.message = fmt::format("NotebookLM: processed {} frames ({} skipped) in {:.1f}s",
-                                 result.frames_processed, result.frames_skipped,
+    result.message = fmt::format("NotebookLM: {} frames ({} inpainted, {} passthrough, "
+                                 "{} skipped) in {:.1f}s",
+                                 result.frames_processed, frames_inpainted,
+                                 frames_passthrough, result.frames_skipped,
                                  result.elapsed_seconds);
-
-    spdlog::info("Done: {} processed, {} skipped, elapsed={:.1f}s",
-                 result.frames_processed, result.frames_skipped,
-                 result.elapsed_seconds);
-
+    spdlog::info("Done: {} processed ({} inpainted, {} passthrough, {} skipped), "
+                 "elapsed={:.1f}s",
+                 result.frames_processed, frames_inpainted, frames_passthrough,
+                 result.frames_skipped, result.elapsed_seconds);
     return result;
 }
 

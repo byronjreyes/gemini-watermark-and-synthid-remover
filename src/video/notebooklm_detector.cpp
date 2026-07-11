@@ -1,5 +1,6 @@
 #include "video/notebooklm_detector.hpp"
 #include "video/video_reader.hpp"
+#include "video/notebooklm_gates.hpp"
 #include "embedded_assets.hpp"
 
 #include <opencv2/imgproc.hpp>
@@ -143,6 +144,64 @@ static cv::Rect snap_to_known(int W, int H, const cv::Rect& detected, const char
     if (best) { mode_out = best->name; return best->rect; }
     mode_out = "auto";
     return detected;
+}
+
+// ---------------------------------------------------------------------------
+// Sample evenly-spaced grayscale frames within a scene range [start, end).
+// Mid-scene seek + next_frame; adequate for presence/complexity analysis on
+// single-file videos. (For concatenated videos, a PTS-verified sequential
+// decode like VideoProcessor::detect_in_shot's scene-range path would be more
+// robust at scene boundaries — a future refinement.)
+// ---------------------------------------------------------------------------
+static std::vector<cv::Mat> sample_scene_frames(VideoReader& reader,
+                                                 int64_t start, int64_t end,
+                                                 int sample_count) {
+    std::vector<cv::Mat> frames;
+    if (end <= start || sample_count <= 0) return frames;
+    const int64_t span = end - start;
+    frames.reserve(sample_count);
+    for (int i = 0; i < sample_count; ++i) {
+        int64_t idx = start + (sample_count == 1 ? 0 : static_cast<int64_t>(
+            static_cast<double>(i) / static_cast<double>(sample_count - 1) *
+            static_cast<double>(span - 1)));
+        if (!reader.seek(idx)) continue;
+        cv::Mat frame;
+        if (!reader.next_frame(frame) || frame.empty()) continue;
+        cv::Mat gray;
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+        frames.push_back(gray);
+    }
+    return frames;
+}
+
+// ---------------------------------------------------------------------------
+// Per-scene presence + complexity gates
+// ---------------------------------------------------------------------------
+bool NotebookLMDetector::mark_present_in_scene(VideoReader& reader, int64_t start,
+                                               int64_t end, float thr,
+                                               float& best_conf_out) {
+    best_conf_out = 0.0f;
+    static cv::Mat tmpl = load_mark_template();  // decoded once, cached
+    if (tmpl.empty()) return false;
+    auto frames = sample_scene_frames(reader, start, end, 5);
+    if (frames.empty()) return false;
+    auto hit = match_mark(frames, tmpl);
+    if (!hit) return false;  // best score below kMinConfidence → absent
+    best_conf_out = hit->score;
+    return hit->score >= thr;
+}
+
+float NotebookLMDetector::background_complexity(VideoReader& reader, int64_t start,
+                                                 int64_t end,
+                                                 const cv::Rect& mark_rect) {
+    if (end <= start) return 0.0f;
+    const int64_t mid = start + (end - start) / 2;
+    if (!reader.seek(mid)) return 0.0f;
+    cv::Mat frame;
+    if (!reader.next_frame(frame) || frame.empty()) return 0.0f;
+    cv::Mat gray;
+    cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+    return background_complexity_score(gray, mark_rect);
 }
 
 // ---------------------------------------------------------------------------

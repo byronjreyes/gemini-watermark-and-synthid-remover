@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.6.0] - 2026-07-11
+
+### NotebookLM adaptive per-scene inpaint dispatch
+
+Phase A of the NotebookLM quality roadmap. `process_notebooklm` now dispatches **per scene** instead of inpainting every frame:
+
+- **Presence gate** — per scene, template-match the mark on sampled frames; scenes where the mark is absent are written through unmodified (no needless inpaint, no degradation of clean frames). Reuses `NotebookLMDetector::mark_present_in_scene`.
+- **Complexity gate** — per scene, a Sobel gradient-energy score around the mark (`notebooklm_gates`: `background_complexity_score`) classifies the background as uniform vs intricate (logged; routing active in Phase B).
+- **ROI crop** — inpaint a padded crop around the mark (not the full frame): faster, smaller visible area.
+- Removal is still NS-only; clean-frame copy / `cv::xphoto` SHIFTMAP (Phase B) and LaMa (Phase C, optional) are reserved behind `InpaintMethod::ShiftMap`/`LaMa`.
+
+#### Changed
+- `InpaintMethod` enum: `ShiftMap` (+ `LaMa` behind `WMR_AI_LAMA`).
+- `VideoWatermarkConfig`: `notebooklm_method`, `notebooklm_complexity_threshold`, `notebooklm_presence_threshold`.
+- CLI: `--notebooklm-method {ns|shiftmap|lama}`, `--complexity-threshold`.
+- New `src/video/notebooklm_gates.{hpp,cpp}` (VideoReader-free gate logic; unit-tested) + `tests/unit/notebooklm_gates_test.cpp`.
+- vcpkg.json version drift fixed (was stale at 1.4.0).
+
+#### Note
+A temporal reverse-alpha "recovery" method was investigated and **ruled out** — the NotebookLM mark is adaptive (α≈0) with no mathematical inverse. Remaining quality upgrades are spatial (Phase B: clean-frame copy + SHIFTMAP; Phase C: optional LaMa ONNX).
+
 ## [1.5.0] - 2026-07-10
 
 ### NotebookLM video watermark removal
