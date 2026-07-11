@@ -640,16 +640,24 @@ VideoResult VideoProcessor::process(const std::string& input_path,
 
 // ---------------------------------------------------------------------------
 // Inpaint the watermark ROI on a single frame. Padded-crop inpaint (faster and
-// a smaller visible area than full-frame cv::inpaint). Method dispatch: Phase A
-// implements NS only; "shiftmap" (Phase B, WMR_HAS_XPHOTO) and "lama" (Phase C,
-// WMR_AI_LAMA) fall back to NS until implemented.
+// a smaller visible area than full-frame cv::inpaint). Method: "fsr" ->
+// cv::xphoto INPAINT_FSR_BEST (with a generous context crop) when WMR_HAS_XPHOTO,
+// else "ns" (cv::inpaint Navier-Stokes, lean crop). Anything else -> NS.
 // ---------------------------------------------------------------------------
+// Context padding (px around the mark) given to FSR so it can continue the
+// surrounding texture and blend smoothly. NS uses a lean radius+4 crop — it only
+// uses the mask edge, so extra context does not help it.
+static constexpr int kFsrContextPad = 30;
+
 static void inpaint_mark_roi(cv::Mat& frame, const cv::Rect& mark_rect,
                              int radius, const std::string& method) {
     const cv::Rect bounds(0, 0, frame.cols, frame.rows);
     cv::Rect mask = mark_rect & bounds;
     if (mask.empty()) return;
-    const int pad = radius + 4;
+    // FSR reconstructs the hole by continuing the surrounding texture, so it
+    // needs a generous context crop to blend smoothly; NS is a local PDE method
+    // and stays lean. (Too-small a crop starves FSR of context -> muddy fill.)
+    const int pad = (method == "fsr") ? kFsrContextPad : (radius + 4);
     cv::Rect roi = (mask + cv::Size(2 * pad, 2 * pad)) - cv::Point(pad, pad);
     roi &= bounds;
     if (roi.width <= 0 || roi.height <= 0) return;
@@ -667,9 +675,12 @@ static void inpaint_mark_roi(cv::Mat& frame, const cv::Rect& mark_rect,
 #if defined(WMR_HAS_XPHOTO)
         // xphoto's mask convention is INVERTED vs cv::inpaint: non-zero = valid,
         // zero = the hole to fill. Same dilated hole extent as the NS path.
+        // FSR_FAST, not FSR_BEST: on this ~130x16 crop FSR_BEST is ~1.3 s/frame
+        // (endless DCT iterations) — infeasible for video — while FSR_FAST is
+        // ~64 ms/frame with near-identical quality on a hole this small.
         cv::Mat xmask;
         cv::bitwise_not(lmask, xmask);
-        cv::xphoto::inpaint(crop, xmask, out, cv::xphoto::INPAINT_FSR_BEST);
+        cv::xphoto::inpaint(crop, xmask, out, cv::xphoto::INPAINT_FSR_FAST);
 #else
         // FSR requested but xphoto not compiled in: fall back to NS.
         cv::inpaint(crop, lmask, out, radius, cv::INPAINT_NS);
