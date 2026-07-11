@@ -46,7 +46,7 @@ jobs:
             vcpkg_triplet: x64-linux
           - os: windows-latest
             artifact: wmr-windows-x86_64.exe
-            binary: build/Release/wmr.exe
+            binary: build/wmr.exe
             vcpkg_triplet: x64-windows-static
 
     runs-on: ${{ matrix.os }}
@@ -116,18 +116,31 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg_triplet }} \
             -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
 
-      - name: Configure (Windows)
+      - name: Configure + Build (Windows, MSVC)
+        # The project cmake must use MSVC (cl.exe) to match the MSVC-built
+        # vcpkg static deps. Without the VS dev env, cmake+Ninja detect MinGW
+        # gcc from PATH -> the final link mixes a MinGW wmr.exe with MSVC object
+        # files (x264 etc.) -> undefined __chkstk / __isa_available / fprintf.
+        # Activate the MSVC env via vswhere (version-independent), then run both
+        # configure and build under MSVC in this single cmd step.
         if: runner.os == 'Windows'
+        shell: cmd
         run: |
-          cmake -B build -S . -GNinja `
-            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
-            -DWMR_BUILD_TESTS=OFF `
-            -DWMR_BUILD_AI_DENOISE=ON `
-            -DVCPKG_MANIFEST_FEATURES="ai-denoise" `
-            -DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg_triplet }} `
+          set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+          for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd /d "${{ github.workspace }}"
+          cmake -B build -S . -GNinja ^
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} ^
+            -DWMR_BUILD_TESTS=OFF ^
+            -DWMR_BUILD_AI_DENOISE=ON ^
+            -DVCPKG_MANIFEST_FEATURES="ai-denoise" ^
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg_triplet }} ^
             -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake"
+          cmake --build build --config ${{ env.BUILD_TYPE }}
 
       - name: Build
+        if: runner.os != 'Windows'
         run: cmake --build build --config ${{ env.BUILD_TYPE }}
 
       - name: AI denoise smoke (CPU path + clean teardown)
@@ -166,7 +179,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           mkdir dist
-          cp build/Release/wmr.exe dist/${{ matrix.artifact }}
+          cp build/wmr.exe dist/${{ matrix.artifact }}
 
       - name: Verify packaged macOS arm64 artifact runs (CPU path)
         if: runner.os == 'macOS' && matrix.macos_arch == 'arm64'
