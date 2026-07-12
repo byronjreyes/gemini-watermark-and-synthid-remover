@@ -20,9 +20,10 @@ struct VideoWatermarkConfig {
     bool scenes = false;
     std::optional<cv::Rect> notebooklm_rect;  // --rect x,y,w,h override
     double scene_threshold = 0.4;
-    // NotebookLM adaptive dispatch (Phase A):
-    std::string notebooklm_method = "auto";        // --notebooklm-method {auto|ns|fsr}
-    double notebooklm_complexity_threshold = 15.0; // --complexity-threshold (intricate if score >= this)
+    // NotebookLM adaptive dispatch (Phase A/B/C):
+    std::string notebooklm_method = "auto";        // --notebooklm-method {auto|ns|fsr|lama}
+    double notebooklm_complexity_threshold = 15.0; // --complexity-threshold (intricate -> FSR if score >= this)
+    double notebooklm_lama_threshold = 60.0;       // --lama-threshold (LaMa on hardest scenes if score >= this)
 };
 
 struct VideoResult {

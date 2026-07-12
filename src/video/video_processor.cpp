@@ -21,6 +21,13 @@
 #include <opencv2/xphoto/inpainting.hpp>
 #endif
 
+#if defined(WMR_AI_LAMA)
+// LaMa ONNX inpainter (Phase C) for the hardest NotebookLM backgrounds that
+// FSR/NS blur/smear. Guarded so a build without LaMa (WMR_BUILD_AI_LAMA=OFF)
+// compiles cleanly and falls back to FSR/NS at runtime.
+#include "core/lama_inpainter.hpp"
+#endif
+
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
@@ -640,13 +647,16 @@ VideoResult VideoProcessor::process(const std::string& input_path,
 
 // ---------------------------------------------------------------------------
 // Inpaint the watermark ROI on a single frame. Padded-crop inpaint (faster and
-// a smaller visible area than full-frame cv::inpaint). Method: "fsr" ->
-// cv::xphoto INPAINT_FSR_BEST (with a generous context crop) when WMR_HAS_XPHOTO,
-// else "ns" (cv::inpaint Navier-Stokes, lean crop). Anything else -> NS.
+// a smaller visible area than full-frame cv::inpaint). Method:
+//   "lama" -> LaMa ONNX (512x512 bottom-right crop) when WMR_AI_LAMA, else NS.
+//   "fsr"  -> cv::xphoto INPAINT_FSR_FAST (generous context crop) when
+//             WMR_HAS_XPHOTO, else NS.
+//   "ns" / anything else -> cv::inpaint Navier-Stokes (lean crop).
 // ---------------------------------------------------------------------------
 // Context padding (px around the mark) given to FSR so it can continue the
 // surrounding texture and blend smoothly. NS uses a lean radius+4 crop — it only
-// uses the mask edge, so extra context does not help it.
+// uses the mask edge, so extra context does not help it. LaMa ignores the small
+// crop entirely (it builds its own 512x512 window).
 static constexpr int kFsrContextPad = 30;
 
 static void inpaint_mark_roi(cv::Mat& frame, const cv::Rect& mark_rect,
@@ -654,6 +664,26 @@ static void inpaint_mark_roi(cv::Mat& frame, const cv::Rect& mark_rect,
     const cv::Rect bounds(0, 0, frame.cols, frame.rows);
     cv::Rect mask = mark_rect & bounds;
     if (mask.empty()) return;
+
+    if (method == "lama") {
+#if defined(WMR_AI_LAMA)
+        // Leaked process singleton: the Ort::Session races ONNX Runtime global
+        // state during static teardown (same rationale as the NCNN denoiser).
+        static LamaInpainter* lama = []() {
+            auto* p = new LamaInpainter();   // intentionally never deleted
+            p->initialize();
+            return p;
+        }();
+        if (lama->is_ready()) {
+            lama->inpaint_hole(frame, mask);
+            return;
+        }
+        // Model missing / init failed -> fall through to the NS path below.
+#else
+        // LaMa requested but not compiled in -> fall through to NS below.
+#endif
+    }
+
     // FSR reconstructs the hole by continuing the surrounding texture, so it
     // needs a generous context crop to blend smoothly; NS is a local PDE method
     // and stays lean. (Too-small a crop starves FSR of context -> muddy fill.)
@@ -765,26 +795,42 @@ VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
 
     // 4b. Resolve the per-scene inpaint method from the complexity gate. "auto"
     //     routes intricate backgrounds to FSR (when xphoto is compiled in) and
-    //     uniform backgrounds to NS; "ns"/"fsr" force a method. With xphoto
-    //     absent, "auto" collapses to NS for every scene — bit-identical to the
-    //     v1.6.0 default (no regression).
+    //     uniform backgrounds to NS; "ns"/"fsr"/"lama" force/gate a method.
+    //     "lama" runs LaMa only on the hardest scenes (complexity >=
+    //     lama_threshold) when WMR_AI_LAMA, else FSR/NS. With xphoto absent,
+    //     "auto" collapses to NS for every scene — bit-identical to the v1.6.0
+    //     default (no regression); LaMa never runs under "auto".
     const bool has_xphoto =
 #if defined(WMR_HAS_XPHOTO)
         true;
 #else
         false;
 #endif
+    const bool has_lama =
+#if defined(WMR_AI_LAMA)
+        true;
+#else
+        false;
+#endif
     std::vector<std::string> scene_method(scenes.size());
     bool warned_no_xphoto = false;
+    bool warned_no_lama = false;
     for (size_t i = 0; i < scenes.size(); ++i) {
         scene_method[i] = resolve_inpaint_method(
             scene_complexity[i], config.notebooklm_complexity_threshold,
-            config.notebooklm_method, has_xphoto);
+            config.notebooklm_lama_threshold, config.notebooklm_method,
+            has_xphoto, has_lama);
         if (!has_xphoto && config.notebooklm_method != "ns" && scene_method[i] == "ns"
             && !warned_no_xphoto) {
             spdlog::warn("NotebookLM: FSR requested but xphoto not compiled in "
                          "(WMR_HAS_XPHOTO undefined); falling back to NS");
             warned_no_xphoto = true;
+        }
+        if (!has_lama && config.notebooklm_method == "lama" && scene_method[i] != "lama"
+            && !warned_no_lama) {
+            spdlog::warn("NotebookLM: LaMa requested but not compiled in "
+                         "(WMR_AI_LAMA undefined); falling back to FSR/NS");
+            warned_no_lama = true;
         }
         spdlog::info("NotebookLM scene {}/{}: complexity={:.1f} -> inpaint({})",
                      i + 1, scenes.size(), scene_complexity[i], scene_method[i]);

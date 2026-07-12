@@ -208,6 +208,85 @@ if(WMR_BUILD_AI_DENOISE)
     target_compile_definitions(${PROJECT_NAME} PRIVATE WMR_AI_DENOISE=1)
 endif()
 
+# LaMa inpainter (ONNX Runtime, CPU) for NotebookLM intricate backgrounds — opt-in.
+# OFF by default keeps the lean dev build ORT-free. Rather than the vcpkg
+# onnxruntime port (heavy source build -> threatens the Windows 6 h CI cap), the
+# OFFICIAL ONNX Runtime prebuilt for the host platform is fetched into the build
+# tree at configure time (file(DOWNLOAD) + SHA256) and exposed as an IMPORTED
+# shared-lib target. This keeps ORT out of the CI build path entirely (no
+# build-time hit) and pins a known-good version (1.27.1 = the eval version).
+# NOTE: ORT dropped osx-x86_64 prebuilts after v1.23.0, so the macOS Intel
+# cross-build must set WMR_BUILD_AI_LAMA=OFF (LaMa unavailable there; the
+# complexity gate falls back to FSR/NS). The model (assets/lama_fp32.onnx) is
+# resolved by LamaInpainter relative to the executable at runtime.
+option(WMR_BUILD_AI_LAMA "Build LaMa inpainter (ONNX Runtime CPU) for NotebookLM hard backgrounds" OFF)
+if(WMR_BUILD_AI_LAMA)
+    set(ORT_VERSION "1.27.1")
+    set(ORT_HASH_osx-arm64 "e42b77a7281cc6e55141bf44fcfbac2c782b823a491bbb6ac33c781dd991f8a6")
+    set(ORT_HASH_linux-x64 "25b1ef1fea1acd210d63f8f24dc870ad6e077795ce1f54876252c6d3803c15af")
+    set(ORT_HASH_win-x64   "2e00414a63fdef0914cd5a5ede6c707844878e0c08e1b6693842f0451b2df2a1")
+
+    if(APPLE)
+        set(ORT_PLATFORM "osx-arm64")
+        set(ORT_ARCHIVE "onnxruntime-${ORT_PLATFORM}-${ORT_VERSION}.tgz")
+        set(ORT_LIBFILE "lib/libonnxruntime.dylib")   # real file; install_name @rpath/libonnxruntime.1.dylib
+        set(ORT_IMPLIB "")
+    elseif(WIN32)
+        set(ORT_PLATFORM "win-x64")
+        set(ORT_ARCHIVE "onnxruntime-${ORT_PLATFORM}-${ORT_VERSION}.zip")
+        set(ORT_LIBFILE "lib/onnxruntime.dll")
+        set(ORT_IMPLIB "lib/onnxruntime.lib")
+    else()
+        set(ORT_PLATFORM "linux-x64")
+        set(ORT_ARCHIVE "onnxruntime-${ORT_PLATFORM}-${ORT_VERSION}.tgz")
+        set(ORT_LIBFILE "lib/libonnxruntime.so")      # symlink -> .so.1 -> .so.1.27.1
+        set(ORT_IMPLIB "")
+    endif()
+
+    set(ORT_ROOT "${CMAKE_BINARY_DIR}/onnxruntime-${ORT_PLATFORM}-${ORT_VERSION}")
+    set(ORT_STAMP "${ORT_ROOT}/.ort.stamp")
+    if(NOT EXISTS "${ORT_STAMP}")
+        set(ORT_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/${ORT_ARCHIVE}")
+        message(STATUS "Fetching ONNX Runtime ${ORT_VERSION} (${ORT_PLATFORM})...")
+        file(DOWNLOAD "${ORT_URL}" "${CMAKE_BINARY_DIR}/${ORT_ARCHIVE}"
+             STATUS ort_dl_status SHOW_PROGRESS
+             EXPECTED_HASH "SHA256=${ORT_HASH_${ORT_PLATFORM}}")
+        list(GET ort_dl_status 0 ort_dl_rc)
+        if(ort_dl_rc)
+            list(GET ort_dl_status 1 ort_dl_msg)
+            message(FATAL_ERROR "ONNX Runtime download failed: ${ort_dl_msg}")
+        endif()
+        file(ARCHIVE_EXTRACT INPUT "${CMAKE_BINARY_DIR}/${ORT_ARCHIVE}" DESTINATION "${ORT_ROOT}.extract")
+        file(REMOVE_RECURSE "${ORT_ROOT}")
+        file(RENAME "${ORT_ROOT}.extract/onnxruntime-${ORT_PLATFORM}-${ORT_VERSION}" "${ORT_ROOT}")
+        file(REMOVE_RECURSE "${ORT_ROOT}.extract")
+        file(WRITE "${ORT_STAMP}" "${ORT_VERSION}\n")
+    endif()
+
+    add_library(wmr_ort SHARED IMPORTED)
+    set_target_properties(wmr_ort PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${ORT_ROOT}/include"
+        IMPORTED_LOCATION "${ORT_ROOT}/${ORT_LIBFILE}")
+    if(ORT_IMPLIB)
+        set_property(TARGET wmr_ort APPEND PROPERTY IMPORTED_IMPLIB "${ORT_ROOT}/${ORT_IMPLIB}")
+    endif()
+
+    target_sources(${PROJECT_NAME} PRIVATE src/core/lama_inpainter.cpp)
+    target_link_libraries(${PROJECT_NAME} PRIVATE wmr_ort)
+    # Let a local dev build find the ORT shared lib from the build tree at runtime.
+    set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY BUILD_RPATH "${ORT_ROOT}/lib")
+    target_compile_definitions(${PROJECT_NAME} PRIVATE WMR_AI_LAMA=1)
+
+    # Ship the LaMa model next to the binary when it is present in assets/ so a
+    # dev build runs without the WMR_LAMA_MODEL env override.
+    if(EXISTS "${CMAKE_SOURCE_DIR}/assets/lama_fp32.onnx")
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/assets/lama_fp32.onnx"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lama_fp32.onnx")
+    endif()
+endif()
+
 # Tests
 option(WMR_BUILD_TESTS "Build test suite" ON)
 if(WMR_BUILD_TESTS)

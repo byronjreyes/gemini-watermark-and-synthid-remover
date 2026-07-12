@@ -23,13 +23,24 @@ bool background_is_intricate(const cv::Mat& gray_frame, const cv::Rect& mark_rec
 // Resolve the per-scene inpaint method from the requested option + the scene's
 // background complexity. Pure (no VideoReader) so it can be unit-tested without
 // linking FFmpeg.
-//   requested:  "auto" (complexity-gated) | "ns" | "fsr"
-//   has_xphoto: whether the build compiled opencv_contrib xphoto
-//               (WMR_HAS_XPHOTO); passed as a bool so the function is testable
-//               in either build configuration.
-// Returns "fsr" only when intricate AND requested allows AND xphoto present;
-// otherwise "ns" (the always-available fallback).
+//   complexity:      scene background-complexity score
+//   threshold:       fsr/complexity threshold — intricate (-> FSR) when
+//                    complexity >= threshold (--complexity-threshold, default 15)
+//   lama_threshold:  LaMa threshold — only the HARDEST scenes (complexity >=
+//                    lama_threshold, --lama-threshold default 60) use LaMa
+//   requested:       "auto" (FSR/NS, never LaMa) | "ns" | "fsr" | "lama"
+//   has_xphoto:      whether the build compiled opencv_contrib xphoto
+//                    (WMR_HAS_XPHOTO); passed as a bool so the function is
+//                    testable in either build configuration.
+//   has_lama:        whether the build compiled the LaMa inpainter
+//                    (WMR_AI_LAMA); same testability rationale.
+// "auto" never routes to LaMa (~2.4 s/frame CPU — infeasible as a default); LaMa
+// runs only on explicit "--notebooklm-method lama" AND the hardest scenes AND
+// when compiled in. Otherwise it falls through to FSR/NS. "ns" is the universal
+// fallback.
 std::string resolve_inpaint_method(float complexity, double threshold,
-                                   const std::string& requested, bool has_xphoto);
+                                   double lama_threshold,
+                                   const std::string& requested,
+                                   bool has_xphoto, bool has_lama);
 
 } // namespace wmr
