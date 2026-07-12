@@ -156,12 +156,15 @@ static cv::Mat run_inference(Ort::Session& sess, const cv::Mat& bgr, const cv::M
     };
     cv::Mat rgb_f;
     cv::merge(planes, 3, rgb_f);          // RGB float HWC (deep copy)
+    // This Carve/LaMa-ONNX export takes image in [0,1] but OUTPUTS in [0,255]
+    // (not [0,1]) — clipping to [0,1] then *255 saturates everything to white.
+    // Clip to [0,255] and convert directly.
     cv::max(rgb_f, 0.0, rgb_f);
-    cv::min(rgb_f, 1.0, rgb_f);           // clip [0,1] (eval: np.clip)
+    cv::min(rgb_f, 255.0, rgb_f);
     cv::Mat bgr_f;
     cv::cvtColor(rgb_f, bgr_f, cv::COLOR_RGB2BGR);
     cv::Mat bgr8;
-    bgr_f.convertTo(bgr8, CV_8U, 255.0);  // [0,1] -> [0,255] (convertTo clamps)
+    bgr_f.convertTo(bgr8, CV_8U);         // already [0,255] -> uint8 (round + clamp)
     return bgr8;
 }
 
