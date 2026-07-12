@@ -114,6 +114,9 @@ CLI11 subcommands in src/cli/: `remove` (default), `visible`, `synthid`, `detect
 - Video encoding defaults: libx264, CRF 14, High profile, slow preset
 - Test executable re-compiles library sources (doesn't link main binary) — add new sources to both CMakeLists.txt and tests/CMakeLists.txt
 - `wmr --version` is the `APP_VERSION` define (`=project(wmr VERSION …)`) baked at CMake **configure** time (cached as `CMAKE_PROJECT_VERSION`). Editing the version doesn't change `build/wmr` until a reconfigure — `cmake --build build` reconfigures automatically when `CMakeLists.txt` changed.
+- Integrating an ONNX inpainter: **probe its IO empirically** (input/output dtype + range, mask polarity — e.g. MI-GAN is uint8 RGB + mask 0=hole; Carve/LaMa-ONNX *outputs* [0,255], not [0,1]); don't assume. Then **verify the actual output is a valid image** (per-channel mean ≈ the original scene, not ~0/~255 saturated) — a white/black output = a scale/polarity bug. Don't trust VLM quality judgments on small/upscaled crops; verify objectively (pixel mean, tensor diff vs a known-good reference).
+- Before commit/merge: `git add -A` + `git status`. The test exe and the dev `build/` compile from the **working tree**, which masks un-staged changes — the MI-GAN swap once shipped a commit with only the *new* files staged, missing modifications/deletions to existing source (caught only by `git status` pre-merge).
+- License/redistribution suitability is the project owner's call, not a hard pre-filter. When evaluating dependencies, rank on technical merit and report license facts separately; don't silently exclude GPL/CC-NC options before the owner decides.
 
 ## Platform Quirks
 
@@ -123,6 +126,7 @@ CLI11 subcommands in src/cli/: `remove` (default), `visible`, `synthid`, `detect
 - Linux links static libgcc/libstdc++; MSVC uses static CRT.
 - **Local build is DYNAMIC; CI is STATIC.** The Homebrew `build/wmr` links OpenCV/FFmpeg/fmt/spdlog dynamically (~10 MB); CI's vcpkg build is fully static (lean release binaries are ~29 MB single self-contained files — `otool -L` shows only system frameworks). Don't judge CI portability from the local binary — inspect the downloaded release binary (`gh release download`).
 - GitHub macOS runners use a paravirtualized Metal GPU (`AppleParavirtDevice`) that throws during MoltenVK `vkCreateInstance` (`newArgumentEncoderWithLayout:`). The GPU path can't run in CI — the `ai-denoise` job verifies CPU only (`VK_ICD_FILENAMES=/nonexistent`); verify GPU out-of-band on real Apple Silicon.
+- CMake post-build model copies (NCNN `ai_denoise_model`, MI-GAN `migan_pipeline_v2.onnx`) are guarded by `if(EXISTS assets/…)` evaluated at **configure time**. Adding/renaming a model under `assets/` after configuring won't copy it next to the binary → silent "model not found" → runtime fallback (NS). Reconfigure (or touch `CMakeLists.txt`) after changing a model asset.
 
 ## CI & Releases
 
