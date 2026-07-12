@@ -138,6 +138,14 @@ elseif(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE /W4 /utf-8)
     target_compile_definitions(${PROJECT_NAME} PRIVATE _CRT_SECURE_NO_WARNINGS)
     if(VCPKG_TARGET_TRIPLET MATCHES "static")
+        # Static CRT (/MT) for the project AND subprojects (NCNN + glslang via
+        # add_subdirectory), so the whole link matches the x64-windows-static
+        # vcpkg deps (which are /MT). The VARIABLE form sets the default for
+        # every target created afterward (incl. ncnn), while the target
+        # property pins wmr itself. Without this ncnn builds /MD -> LNK2005
+        # (msvcprt vs libcpmt) + LNK2019 (__imp_nearbyintf/erff/fesetround,
+        # dynamic-ucrt import stubs the static-ucrt link can't resolve).
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
         set_property(TARGET ${PROJECT_NAME} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
     endif()
 endif()
