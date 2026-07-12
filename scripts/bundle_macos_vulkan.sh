@@ -42,6 +42,19 @@ cp "$BIN" "$OUT/wmr.bin"
 cp -L "$VULKAN_LOADER_LIB" "$OUT/lib/libvulkan.1.dylib"
 cp -L "$MOLTENVK_LIB"      "$OUT/lib/libMoltenVK.dylib"
 
+# ONNX Runtime shared lib (LaMa inpainter, WMR_BUILD_AI_LAMA). The configure-time
+# ORT fetch leaves it next to the binary under onnxruntime-osx-*/lib. Co-located
+# in lib/ like the Vulkan libs — the binary's load cmd is @rpath/libonnxruntime.1.dylib
+# and @loader_path/lib is added to the rpath below (for Vulkan), so dyld finds it.
+# Skipped if no ORT lib is present (LaMa-OFF build). (Pathname expansion does not
+# occur in a bare assignment, so resolve the glob via ls -d.)
+ORT_LIB_DIR=$(ls -d "$(dirname "$BIN")"/onnxruntime-osx-*/lib 2>/dev/null | head -n1 || true)
+if [ -n "$ORT_LIB_DIR" ] && [ -d "$ORT_LIB_DIR" ]; then
+    cp -L "$ORT_LIB_DIR"/libonnxruntime.1.dylib "$OUT/lib/libonnxruntime.1.dylib"
+    codesign --force --sign - "$OUT/lib/libonnxruntime.1.dylib"
+    echo "  + libonnxruntime.1.dylib (LaMa)"
+fi
+
 # ICD manifest: the Vulkan loader resolves `library_path` RELATIVE TO THE MANIFEST
 # file, so a bare filename finds the co-located libMoltenVK.dylib.
 cat > "$OUT/lib/MoltenVK_icd.json" <<'JSON'

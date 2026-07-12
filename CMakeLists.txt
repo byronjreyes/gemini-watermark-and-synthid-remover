@@ -275,6 +275,14 @@ if(WMR_BUILD_AI_LAMA)
     target_link_libraries(${PROJECT_NAME} PRIVATE wmr_ort)
     # Let a local dev build find the ORT shared lib from the build tree at runtime.
     set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY BUILD_RPATH "${ORT_ROOT}/lib")
+    if(WIN32)
+        # Windows resolves the DLL from the exe dir; co-locate it post-build so dev
+        # runs + the CI smoke (build/wmr.exe) load onnxruntime.dll. (Linux finds it
+        # via BUILD_RPATH; macOS via the bundle's @loader_path/lib rpath.)
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ORT_ROOT}/lib/onnxruntime.dll" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/onnxruntime.dll")
+    endif()
     target_compile_definitions(${PROJECT_NAME} PRIVATE WMR_AI_LAMA=1)
 
     # Ship the LaMa model next to the binary when it is present in assets/ so a
