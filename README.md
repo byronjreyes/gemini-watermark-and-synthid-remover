@@ -23,7 +23,7 @@ Prebuilt binaries for every release are on the [Releases page](https://github.co
 | Asset | Platform | Notes |
 |-------|----------|-------|
 | `wmr-macos-arm64.tar.gz` | macOS arm64 | Bundled Vulkan/MoltenVK → GPU AI denoise out of the box. Extract and run `./wmr`. |
-| `wmr-macos-x86_64` | macOS Intel | Cross-compiled; AI runs on CPU (GPU if you install the Vulkan SDK). |
+| `wmr-macos-x86_64` | macOS Intel | Cross-compiled; AI runs on **CPU only** (the Intel build compiles without Vulkan — no GPU path; the arm64 build is the GPU one). |
 | `wmr-linux-x86_64` | Linux | Self-contained; GPU AI when a Vulkan loader is present, else CPU. |
 | `wmr-windows-x86_64.exe` | Windows | Self-contained; GPU AI when `vulkan-1.dll` is present, else CPU. |
 

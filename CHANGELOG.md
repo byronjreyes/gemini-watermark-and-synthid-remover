@@ -13,6 +13,14 @@ The per-scene presence gate (template-match the mark per scene, skip "absent" on
 - **Fix:** inpaint **every** scene. A false negative = a visible watermark (unacceptable); a false positive = inpainting an already-clean ~121×17 patch (imperceptible — FSR/NS just reconstructs the background). Verified on Arcade: 0 skipped, all 42 scenes inpainted; previously-skipped scenes 15 (clean) and 18 (soft on a complexity-125 cartoon — the documented Phase-B limit) now have the watermark removed.
 - **Removed** the dead presence-gate code: `NotebookLMDetector::mark_present_in_scene`, `sample_scene_frames`, and the `notebooklm_presence_threshold` config field. The complexity gate still routes FSR vs NS.
 
+### Consolidated release: cross-platform build fixes (first shippable 1.7.x)
+
+1.7.0 consolidated the release into one self-contained package per platform (see below) but never shipped — the consolidated CI build needed four platform fixes, all landed here:
+
+- **macOS x86_64:** install `nasm` (the cold `x64-osx` triplet builds `x264` from source) and build `WMR_NCNN_VULKAN=OFF` (on Apple, NCNN's simplevk does static Vulkan linkage and needs a build-time `libvulkan`, unavailable for x86_64 on the arm64 runner) → **Intel AI is CPU-only**; the arm64 build is the GPU one.
+- **Windows:** the project `cmake` step now runs inside the MSVC dev env (`vswhere` + `vcvarsall.bat x64`) so it compiles with `cl.exe` to match the MSVC-built vcpkg deps (the bare step otherwise detected MinGW gcc → link failure), and `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded` propagates `/MT` to the `ncnn` subproject to match the `x64-windows-static` deps.
+- All four legs (mac arm64/x86_64, linux, windows) + the `tests` job verified green; Windows (~2 h) is the long pole, well under the 6 h cap.
+
 ## [1.7.0] - 2026-07-11
 
 ### NotebookLM FSR inpaint for intricate backgrounds (kills the NS diamond)
@@ -38,7 +46,7 @@ FSR is a **partial** fix — it kills the diamond and blends far better than NS,
 The 4 lean binaries + separate macOS AI tarball are replaced by **one self-contained package per (OS, arch)**, each shipping the FDnCNN AI denoise (NCNN+Vulkan) + FSR. No more lean/full split.
 
 - **`release.yml` 4-leg matrix:** macOS arm64 (native + bundled Vulkan loader/MoltenVK → out-of-the-box GPU), macOS x86_64 (**cross-compiled** on the arm64 runner via `x64-osx` + Rosetta — the old `wmr-macos-x86_64` was arm64-mislabeled, and the only Intel runner `macos-13` was retired), Linux, Windows. `WMR_BUILD_AI_DENOISE=ON` + recursive submodules + `ai-denoise` vcpkg feature on every leg; CPU denoise smoke on all.
-- **Vulkan handling:** macOS arm64 bundles the loader + MoltenVK (no system Vulkan); macOS x86_64, Linux, Windows rely on NCNN's `simplevk` runtime `dlopen` (system `vulkan-1.dll`/`libvulkan.so.1` if present, else graceful CPU fallback) — **no Vulkan SDK at build time** on those platforms.
+- **Vulkan handling:** macOS arm64 bundles the loader + MoltenVK (no system Vulkan → out-of-the-box GPU); macOS **x86_64 is built `WMR_NCNN_VULKAN=OFF` (CPU-only AI)** — on Apple, NCNN's simplevk does *static* Vulkan linkage and needs a build-time `libvulkan`, but there's no x86_64 Vulkan dylib on the arm64 cross-build runner, so Vulkan is compiled out entirely (Intel AI is CPU-only; the arm64 build is the GPU one). Linux, Windows rely on NCNN's `simplevk` runtime `dlopen` (system `vulkan-1.dll`/`libvulkan.so.1` if present, else graceful CPU fallback).
 - **New `tests` CI job** (ubuntu, `WMR_BUILD_AI_DENOISE=ON + WMR_BUILD_TESTS=ON`) restores AI + routing test coverage the dev-default-OFF / release-TESTS-OFF gap previously dropped.
 - `release` attaches 4 assets + `LICENSE-THIRD-PARTY.md`; the standalone `ai-denoise` job is removed (folded into the matrix + `tests`).
 
