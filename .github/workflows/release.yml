@@ -279,8 +279,6 @@ jobs:
 
       - name: Verify packaged macOS arm64 artifact runs (CPU path)
         if: runner.os == 'macOS' && matrix.macos_arch == 'arm64'
-        env:
-          HAS_CERT: "${{ secrets.MACOS_CERTIFICATE != '' && '1' || '' }}"
         run: |
           set -euo pipefail
           mkdir -p /tmp/verify
@@ -289,10 +287,14 @@ jobs:
           VK_ICD_FILENAMES=/nonexistent "$ROOT/wmr" remove test-images/2400x1792-test1-gemini.png --denoise ai -o /tmp/verify_out.png
           # assert native CoreML (no ORT) + the .mlpackage shipped.
           otool -L "$ROOT/wmr.bin" | grep -i CoreML
-          ! otool -L "$ROOT/wmr.bin" | grep -i onnxruntime
+          if otool -L "$ROOT/wmr.bin" | grep -qi onnxruntime; then
+            echo "fail: onnxruntime is linked (mac build must be CoreML-only)"
+            exit 1
+          fi
           test -d "$ROOT/migan_512_places2_fp16.mlpackage"
-          "$ROOT/wmr" video --help | grep -q -- "--notebooklm-method"
-          if [ "$HAS_CERT" = "1" ]; then
+          "$ROOT/wmr" video --help > /tmp/vhelp.txt 2>&1 || true
+          grep -q -- "--notebooklm-method" /tmp/vhelp.txt
+          if [ "$HAS_CERT" = "true" ]; then
             codesign --verify --strict --verbose=2 "$ROOT/wmr.bin"
             codesign -dv "$ROOT/wmr.bin" | grep -q "Authority=Developer ID Application"
             if [ -d "$ROOT/lib" ]; then
@@ -302,8 +304,6 @@ jobs:
 
       - name: Verify packaged macOS x86_64 artifact runs (CPU path)
         if: runner.os == 'macOS' && matrix.macos_arch == 'x86_64'
-        env:
-          HAS_CERT: "${{ secrets.MACOS_CERTIFICATE != '' && '1' || '' }}"
         run: |
           set -euo pipefail
           mkdir -p /tmp/verify-x86
@@ -312,10 +312,14 @@ jobs:
           # x86_64 binary runs on the arm64 host via Rosetta. CoreML MI-GAN present.
           VK_ICD_FILENAMES=/nonexistent "$ROOT/wmr" remove test-images/2400x1792-test1-gemini.png --denoise ai -o /tmp/verify_x86_out.png
           otool -L "$ROOT/wmr" | grep -i CoreML
-          ! otool -L "$ROOT/wmr" | grep -i onnxruntime
+          if otool -L "$ROOT/wmr" | grep -qi onnxruntime; then
+            echo "fail: onnxruntime is linked (mac build must be CoreML-only)"
+            exit 1
+          fi
           test -d "$ROOT/migan_512_places2_fp16.mlpackage"
-          "$ROOT/wmr" video --help | grep -q -- "--notebooklm-method"
-          if [ "$HAS_CERT" = "1" ]; then
+          "$ROOT/wmr" video --help > /tmp/vhelp.txt 2>&1 || true
+          grep -q -- "--notebooklm-method" /tmp/vhelp.txt
+          if [ "$HAS_CERT" = "true" ]; then
             codesign --verify --strict --verbose=2 "$ROOT/wmr"
             codesign -dv "$ROOT/wmr" | grep -q "Authority=Developer ID Application"
           fi
