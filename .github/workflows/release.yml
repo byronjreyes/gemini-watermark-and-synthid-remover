@@ -7,6 +7,9 @@ on:
 
 env:
   BUILD_TYPE: Release
+  # secrets.* is not allowed in step `if:` conditions, so expose the cert's
+  # presence as a plain 'true'/'false' string and gate steps on env.HAS_CERT.
+  HAS_CERT: ${{ secrets.MACOS_CERTIFICATE != '' }}
 
 jobs:
   # Single full-package build per (OS, arch). Every release binary ships the
@@ -174,7 +177,7 @@ jobs:
         # at the step level: if the secret is absent the step is skipped and the
         # unsigned-fallback packaging steps run instead. The secret value never
         # flows into an env var used for gating (only into the import below).
-        if: runner.os == 'macOS' && secrets.MACOS_CERTIFICATE != ''
+        if: runner.os == 'macOS' && env.HAS_CERT == 'true'
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -206,7 +209,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PP" "$KC"
 
       - name: Package + sign + notarize (macOS arm64)
-        if: runner.os == 'macOS' && matrix.macos_arch == 'arm64' && secrets.MACOS_CERTIFICATE != ''
+        if: runner.os == 'macOS' && matrix.macos_arch == 'arm64' && env.HAS_CERT == 'true'
         env:
           AC_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           AC_API_KEY_ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
@@ -219,7 +222,7 @@ jobs:
           ./scripts/sign_and_notarize_macos.sh staging/wmr-macos-arm64 dist/wmr-macos-arm64.zip
 
       - name: Package (macOS arm64, unsigned fallback)
-        if: runner.os == 'macOS' && matrix.macos_arch == 'arm64' && secrets.MACOS_CERTIFICATE == ''
+        if: runner.os == 'macOS' && matrix.macos_arch == 'arm64' && env.HAS_CERT == 'false'
         run: |
           mkdir -p dist staging/wmr-macos-arm64
           ./scripts/bundle_macos_vulkan.sh build/wmr staging/wmr-macos-arm64
@@ -227,7 +230,7 @@ jobs:
           ditto -c -k --keepParent staging/wmr-macos-arm64 dist/wmr-macos-arm64.zip
 
       - name: Package + sign + notarize (macOS x86_64)
-        if: runner.os == 'macOS' && matrix.macos_arch == 'x86_64' && secrets.MACOS_CERTIFICATE != ''
+        if: runner.os == 'macOS' && matrix.macos_arch == 'x86_64' && env.HAS_CERT == 'true'
         env:
           AC_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           AC_API_KEY_ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
@@ -241,7 +244,7 @@ jobs:
           ./scripts/sign_and_notarize_macos.sh staging/wmr-macos-x86_64 dist/wmr-macos-x86_64.zip
 
       - name: Package (macOS x86_64, unsigned fallback)
-        if: runner.os == 'macOS' && matrix.macos_arch == 'x86_64' && secrets.MACOS_CERTIFICATE == ''
+        if: runner.os == 'macOS' && matrix.macos_arch == 'x86_64' && env.HAS_CERT == 'false'
         run: |
           mkdir -p dist staging/wmr-macos-x86_64
           cp build/wmr staging/wmr-macos-x86_64/wmr
