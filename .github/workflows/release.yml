@@ -184,7 +184,7 @@ jobs:
           # 1.10.0: x86_64 now ships CoreML MI-GAN too (system framework +
           # arch-neutral .mlpackage). Becomes a tarball (was a bare binary) so
           # the .mlpackage can sit next to it.
-          mkdir -p staging/wmr-macos-x86_64
+          mkdir -p dist staging/wmr-macos-x86_64
           cp build/wmr staging/wmr-macos-x86_64/wmr
           chmod +x staging/wmr-macos-x86_64/wmr
           cp -R assets/migan_512_places2_fp16.mlpackage staging/wmr-macos-x86_64/
