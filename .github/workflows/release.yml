@@ -44,7 +44,7 @@ jobs:
             binary: build/wmr
             macos_arch: x86_64
             vcpkg_triplet: x64-osx
-            enable_migan: false
+            enable_migan: true   # 1.10.0: CoreML (system framework, arch-neutral .mlpackage) — Intel Macs gain MI-GAN
           - os: ubuntu-latest
             artifact: wmr-linux-x86_64
             binary: build/wmr
@@ -62,7 +62,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive          # NCNN submodule (in-tree Vulkan build)
-          lfs: ${{ matrix.enable_migan }}  # migan_pipeline_v2.onnx (27MB) only where MI-GAN ships
+          # macOS ships the CoreML .mlpackage (14MB, LFS); Linux/Windows ship the ORT .onnx (27MB).
+          lfs: ${{ matrix.enable_migan }}
 
       - name: Install Rosetta (macOS x86_64 cross-build)
         # Cross-compiling for x64-osx on an arm64 runner builds x86_64 host tools
@@ -172,15 +173,22 @@ jobs:
         run: |
           mkdir -p dist
           ./scripts/bundle_macos_vulkan.sh build/wmr staging/wmr-macos-arm64
-          cp assets/migan_pipeline_v2.onnx staging/wmr-macos-arm64/
+          # 1.10.0: macOS uses native CoreML (no ORT). Ship the .mlpackage dir
+          # (the ORT .onnx + libonnxruntime dylib are gone from mac).
+          cp -R assets/migan_512_places2_fp16.mlpackage staging/wmr-macos-arm64/
           tar -czf dist/${{ matrix.artifact }}.tar.gz -C staging wmr-macos-arm64
 
-      - name: Package (macOS x86_64 binary)
+      - name: Package (macOS x86_64 tarball)
         if: runner.os == 'macOS' && matrix.macos_arch == 'x86_64'
         run: |
-          mkdir -p dist
-          cp build/wmr dist/${{ matrix.artifact }}
-          chmod +x dist/${{ matrix.artifact }}
+          # 1.10.0: x86_64 now ships CoreML MI-GAN too (system framework +
+          # arch-neutral .mlpackage). Becomes a tarball (was a bare binary) so
+          # the .mlpackage can sit next to it.
+          mkdir -p staging/wmr-macos-x86_64
+          cp build/wmr staging/wmr-macos-x86_64/wmr
+          chmod +x staging/wmr-macos-x86_64/wmr
+          cp -R assets/migan_512_places2_fp16.mlpackage staging/wmr-macos-x86_64/
+          tar -czf dist/${{ matrix.artifact }}.tar.gz -C staging wmr-macos-x86_64
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
@@ -212,6 +220,10 @@ jobs:
         run: |
           mkdir -p /tmp/verify && tar -xzf dist/${{ matrix.artifact }}.tar.gz -C /tmp/verify
           VK_ICD_FILENAMES=/nonexistent /tmp/verify/wmr-macos-arm64/wmr remove test-images/2400x1792-test1-gemini.png --denoise ai -o /tmp/verify_out.png
+          # 1.10.0: assert native CoreML (no ORT) + the .mlpackage shipped.
+          otool -L /tmp/verify/wmr-macos-arm64/wmr.bin | grep -i CoreML
+          ! otool -L /tmp/verify/wmr-macos-arm64/wmr.bin | grep -i onnxruntime
+          test -d /tmp/verify/wmr-macos-arm64/migan_512_places2_fp16.mlpackage
 
       - uses: actions/upload-artifact@v4
         with:
@@ -279,7 +291,7 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/wmr-macos-arm64/wmr-macos-arm64.tar.gz
-            artifacts/wmr-macos-x86_64/wmr-macos-x86_64
+            artifacts/wmr-macos-x86_64/wmr-macos-x86_64.tar.gz
             artifacts/wmr-linux-x86_64/wmr-linux-x86_64.tar.gz
             artifacts/wmr-windows-x86_64/wmr-windows-x86_64.zip
             LICENSE-THIRD-PARTY.md

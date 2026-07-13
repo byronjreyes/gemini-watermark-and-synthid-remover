@@ -1,18 +1,22 @@
 # Third-Party Licenses — `wmr` release binaries
 
 Every `wmr` release binary is a self-contained package that ships the FDnCNN AI
-denoise (NCNN + volk, an embedded model) and — as of v1.9.0 — MI-GAN inpaint
-(ONNX Runtime + a bundled model; replaces the earlier FSR/LaMa). NCNN, volk,
-FDnCNN, OpenCV (incl. the opencv_contrib `xphoto` module, still linked though FSR
-is now removed — pending a cleanup), and ONNX Runtime are linked into the
-package; their licenses are reproduced below so they travel with every download.
+denoise (NCNN + volk, an embedded model) and MI-GAN inpaint (a bundled model).
+NCNN, volk, FDnCNN, OpenCV (incl. the opencv_contrib `xphoto` module, still
+linked though FSR is now removed — pending a cleanup), and — on Linux/Windows —
+ONNX Runtime are linked into the package; their licenses are reproduced below so
+they travel with every download.
 
-The macOS arm64 package additionally bundles the Vulkan loader (`libvulkan`),
-MoltenVK (`libMoltenVK`), the ONNX Runtime shared lib (`libonnxruntime`), and the
-MI-GAN model next to the binary. The Linux and Windows packages likewise co-locate
-`libonnxruntime.so.1` / `onnxruntime.dll` and the MI-GAN model. The macOS Intel
-build is MI-GAN-free (no osx-x86_64 ONNX Runtime build exists); it falls back to
-NS for NotebookLM. MoltenVK ships its own license inside its dylib.
+**As of v1.10.0, macOS (arm64 + Intel) runs MI-GAN via Apple's CoreML framework**
+(a system framework linked at build time, not a vendored library — no third-party
+component is added to the macOS packages; the MI-GAN model ships as a 14 MB
+`.mlpackage`). ONNX Runtime is no longer shipped on macOS. Linux/Windows continue
+to use ONNX Runtime (MIT) as before.
+
+The macOS arm64 package additionally bundles the Vulkan loader (`libvulkan`) and
+MoltenVK (`libMoltenVK`) for the AI-denoise GPU path. The Linux and Windows
+packages co-locate `libonnxruntime.so.1` / `onnxruntime.dll` and the MI-GAN
+(ONNX) model. MoltenVK ships its own license inside its dylib.
 
 ---
 

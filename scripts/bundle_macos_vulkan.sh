@@ -46,13 +46,14 @@ cp -L "$MOLTENVK_LIB"      "$OUT/lib/libMoltenVK.dylib"
 # ORT fetch leaves it next to the binary under onnxruntime-osx-*/lib. Co-located
 # in lib/ like the Vulkan libs — the binary's load cmd is @rpath/libonnxruntime.1.dylib
 # and @loader_path/lib is added to the rpath below (for Vulkan), so dyld finds it.
-# Skipped if no ORT lib is present (LaMa-OFF build). (Pathname expansion does not
-# occur in a bare assignment, so resolve the glob via ls -d.)
+# 1.10.0: macOS uses native CoreML for MI-GAN (no ORT), so this is a no-op on mac
+# (the glob finds nothing). Kept for a hypothetical future ORT-on-mac build.
+# (Pathname expansion does not occur in a bare assignment, so resolve via ls -d.)
 ORT_LIB_DIR=$(ls -d "$(dirname "$BIN")"/onnxruntime-osx-*/lib 2>/dev/null | head -n1 || true)
 if [ -n "$ORT_LIB_DIR" ] && [ -d "$ORT_LIB_DIR" ]; then
     cp -L "$ORT_LIB_DIR"/libonnxruntime.1.dylib "$OUT/lib/libonnxruntime.1.dylib"
     codesign --force --sign - "$OUT/lib/libonnxruntime.1.dylib"
-    echo "  + libonnxruntime.1.dylib (LaMa)"
+    echo "  + libonnxruntime.1.dylib (ORT MI-GAN)"
 fi
 
 # ICD manifest: the Vulkan loader resolves `library_path` RELATIVE TO THE MANIFEST

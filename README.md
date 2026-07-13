@@ -18,14 +18,14 @@ A C++20 CLI tool for removing visible and invisible watermarks from images and v
 
 ### Download
 
-Prebuilt binaries for every release are on the [Releases page](https://github.com/froggeric/gemini-watermark-and-synthid-remover/releases) — no build step required. As of v1.9.0 every asset is a self-contained package that ships the FDnCNN AI denoise + **MI-GAN** inpaint (ONNX Runtime, the default NotebookLM intricate-scene inpainter); there is no lean/full split. The macOS arm64, Linux, and Windows packages bundle the ONNX Runtime shared lib + the 27 MB MI-GAN model alongside the binary (so they're archives, not single files); the macOS Intel build is MI-GAN-free (NS fallback).
+Prebuilt binaries for every release are on the [Releases page](https://github.com/froggeric/gemini-watermark-and-synthid-remover/releases) — no build step required. Every asset is a self-contained package that ships the FDnCNN AI denoise + **MI-GAN** inpaint (the default NotebookLM intricate-scene inpainter); there is no lean/full split. **As of v1.10.0, macOS (arm64 + Intel) uses native CoreML** — MI-GAN runs on the Neural Engine at ~28 ms/frame (~11× faster than the previous ONNX-Runtime CPU path); macOS requires 14+. **Linux/Windows use ONNX Runtime** (~225 ms/frame CPU) and bundle the ORT shared lib + 27 MB model.
 
 | Asset | Platform | Notes |
 |-------|----------|-------|
-| `wmr-macos-arm64.tar.gz` | macOS arm64 | Bundled Vulkan/MoltenVK (GPU AI out of the box) + ONNX Runtime + MI-GAN model. Extract and run `./wmr`. |
-| `wmr-macos-x86_64` | macOS Intel | Cross-compiled; AI on **CPU only** and **no MI-GAN** (no osx-x86_64 ONNX Runtime build — the limited Intel build; arm64 is the full one). Single binary. |
-| `wmr-linux-x86_64.tar.gz` | Linux | Archive: binary + `libonnxruntime.so.1` + MI-GAN model. GPU AI when a Vulkan loader is present, else CPU. |
-| `wmr-windows-x86_64.zip` | Windows | Archive: `wmr.exe` + `onnxruntime.dll` + MI-GAN model. GPU AI when `vulkan-1.dll` is present, else CPU. |
+| `wmr-macos-arm64.tar.gz` | macOS arm64 (14+) | Bundled Vulkan/MoltenVK (GPU AI-denoise out of the box) + native CoreML MI-GAN (Neural Engine, `.mlpackage`). Extract and run `./wmr`. |
+| `wmr-macos-x86_64.tar.gz` | macOS Intel (14+) | Cross-compiled; native CoreML MI-GAN (Neural Engine, same `.mlpackage`); AI-denoise on CPU. Tarball (binary + `.mlpackage`). |
+| `wmr-linux-x86_64.tar.gz` | Linux | Archive: binary + `libonnxruntime.so.1` + MI-GAN model. GPU AI-denoise when a Vulkan loader is present, else CPU. |
+| `wmr-windows-x86_64.zip` | Windows | Archive: `wmr.exe` + `onnxruntime.dll` + MI-GAN model. GPU AI-denoise when `vulkan-1.dll` is present, else CPU. |
 
 ```bash
 # macOS arm64 (tarball with bundled GPU driver + MI-GAN model)
@@ -201,9 +201,9 @@ Video processing uses pure reverse alpha blending — the same lossless method a
 
 Supports both Gemini (diamond) and Veo (text) video watermarks via `--legacy` flag.
 
-**NotebookLM** video watermarks (the rainbow logo + "NotebookLM" wordmark) use a separate path. The mark is semi-transparent and color-adaptive (not a reversible alpha overlay), so removal uses spatial inpainting after template-based auto-detection of the bottom-right mark. Processing is **per-scene**: a background-complexity gate picks the method per scene — **MI-GAN** (ONNX Runtime, MIT, mobile-optimized) for intricate/textured backgrounds and **Navier-Stokes** for uniform ones. There is no method flag — the pipeline always uses NS + MI-GAN.
+**NotebookLM** video watermarks (the rainbow logo + "NotebookLM" wordmark) use a separate path. The mark is semi-transparent and color-adaptive (not a reversible alpha overlay), so removal uses spatial inpainting after template-based auto-detection of the bottom-right mark. Processing is **per-scene**: a background-complexity gate picks the method per scene — **MI-GAN** (CoreML on macOS, ONNX Runtime on Linux/Windows; MIT, mobile-optimized) for intricate/textured backgrounds and **Navier-Stokes** for uniform ones. There is no method flag — the pipeline always uses NS + MI-GAN.
 
-**MI-GAN** is the default intricate-scene inpainter (replaces the earlier FSR/LaMa): ~225 ms/frame on CPU, a 27 MB model, MIT-licensed. It's sharper than both predecessors on cartoons/textures and more robust, and at ~225 ms it's practical as a default (not an opt-in). `--complexity-threshold` (default 15) controls the NS↔MI-GAN boundary. MI-GAN runs on CPU — GPU (CoreML) was tested and is *slower* via ONNX Runtime (graph partitioning overhead); a native CoreML build is a possible future macOS-only optimization. Not available in the macOS Intel build (no osx-x86_64 ONNX Runtime) — falls back to NS.
+**MI-GAN** is the default intricate-scene inpainter (replaces the earlier FSR/LaMa), MIT-licensed, sharper than both predecessors on cartoons/textures and more robust. `--complexity-threshold` (default 15) controls the NS↔MI-GAN boundary. **macOS (v1.10.0)** runs MI-GAN as a native CoreML fp16 model on the Neural Engine — ~28 ms/frame (~11× faster than the previous ONNX-Runtime CPU path; A/B-verified to match it within Δ1.9/255), requires macOS 14+, and now also covers Intel Macs. (The earlier "CoreML is slower" finding was ONNX Runtime's *CoreML execution provider* — its graph-partitioning overhead, not CoreML itself; a native `coremltools` mlprogram avoids it.) **Linux/Windows** run MI-GAN on ONNX Runtime CPU (~225 ms/frame).
 
 - Works across cinematic, explainer, and short-portrait exports; detection is polarity-invariant (light-on-dark or dark-on-light) and robust across scene cuts.
 - If auto-detection misses the mark, specify the region manually with `--rect x,y,w,h` (measure it in a graphics editor on a full frame — see the `*_FRAME.png` reference frames).
@@ -306,7 +306,7 @@ The `wmr` launcher points the Vulkan loader at the bundled ICD manifest (`VK_ICD
 | NCNN | Neural-network inference for the AI denoise (optional, `WMR_BUILD_AI_DENOISE` only) |
 | volk | Vulkan meta-loader (optional, AI build only) |
 | Vulkan loader + MoltenVK | Vulkan/Metal GPU for the AI denoise (optional; bundled into the `wmr-macos-arm64` release) |
-| ONNX Runtime | Neural-network inference for the MI-GAN inpainter (optional, `WMR_BUILD_AI_MIGAN` only; fetched prebuilt at configure time) |
+| ONNX Runtime | Neural-network inference for the MI-GAN inpainter on Linux/Windows (optional, `WMR_BUILD_AI_MIGAN` only; fetched prebuilt at configure time). macOS uses CoreML (a system framework — no vendored lib) instead. |
 | CMake + vcpkg | Build system and package management |
 
 ## Source Projects

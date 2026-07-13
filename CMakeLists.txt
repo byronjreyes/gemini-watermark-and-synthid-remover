@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(wmr VERSION 1.9.0 LANGUAGES CXX)
+project(wmr VERSION 1.10.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -220,19 +220,36 @@ endif()
 # (MI-GAN unavailable there; the complexity gate falls back to NS). The model
 # (assets/migan_pipeline_v2.onnx) is resolved by MiganInpainter relative to the
 # executable at runtime.
-option(WMR_BUILD_AI_MIGAN "Build MI-GAN inpainter (ONNX Runtime CPU) for NotebookLM intricate backgrounds" OFF)
+option(WMR_BUILD_AI_MIGAN "Build MI-GAN inpainter for NotebookLM intricate backgrounds (CoreML on macOS, ONNX Runtime on Linux/Windows)" OFF)
 if(WMR_BUILD_AI_MIGAN)
+  if(APPLE)
+    # ---- macOS: native CoreML (replaces ORT). CoreML is a system framework (no
+    # vendored lib) and the .mlpackage is arch-neutral, so this enables BOTH
+    # arm64 and x86_64 — Intel Macs (previously MI-GAN-OFF) gain MI-GAN. ~28 ms
+    # /frame on the ANE (vs ORT-CPU ~225 ms; A/B-verified Δ1.9/255). ----
+    enable_language(OBJCXX)
+    find_library(COREML_LIB CoreML REQUIRED)
+    find_library(FOUNDATION_LIB Foundation REQUIRED)
+    target_sources(${PROJECT_NAME} PRIVATE src/core/migan_coreml_inpainter.mm)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${COREML_LIB} ${FOUNDATION_LIB})
+    target_compile_definitions(${PROJECT_NAME} PRIVATE WMR_AI_MIGAN=1 WMR_AI_MIGAN_COREML=1)
+
+    # Ship the .mlpackage DIRECTORY next to the binary (copy_directory — the model
+    # is a multi-file bundle, not a single file; copy_if_different won't work).
+    set(MIGAN_MLPACKAGE "${CMAKE_SOURCE_DIR}/assets/migan_512_places2_fp16.mlpackage")
+    if(EXISTS "${MIGAN_MLPACKAGE}")
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${MIGAN_MLPACKAGE}"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/migan_512_places2_fp16.mlpackage")
+    endif()
+  else()
+    # ---- Linux/Windows: ONNX Runtime CPU (unchanged). ----
     set(ORT_VERSION "1.27.1")
-    set(ORT_HASH_osx-arm64 "e42b77a7281cc6e55141bf44fcfbac2c782b823a491bbb6ac33c781dd991f8a6")
     set(ORT_HASH_linux-x64 "25b1ef1fea1acd210d63f8f24dc870ad6e077795ce1f54876252c6d3803c15af")
     set(ORT_HASH_win-x64   "2e00414a63fdef0914cd5a5ede6c707844878e0c08e1b6693842f0451b2df2a1")
 
-    if(APPLE)
-        set(ORT_PLATFORM "osx-arm64")
-        set(ORT_ARCHIVE "onnxruntime-${ORT_PLATFORM}-${ORT_VERSION}.tgz")
-        set(ORT_LIBFILE "lib/libonnxruntime.dylib")   # real file; install_name @rpath/libonnxruntime.1.dylib
-        set(ORT_IMPLIB "")
-    elseif(WIN32)
+    if(WIN32)
         set(ORT_PLATFORM "win-x64")
         set(ORT_ARCHIVE "onnxruntime-${ORT_PLATFORM}-${ORT_VERSION}.zip")
         set(ORT_LIBFILE "lib/onnxruntime.dll")
@@ -279,7 +296,7 @@ if(WMR_BUILD_AI_MIGAN)
     if(WIN32)
         # Windows resolves the DLL from the exe dir; co-locate it post-build so dev
         # runs + the CI smoke (build/wmr.exe) load onnxruntime.dll. (Linux finds it
-        # via BUILD_RPATH; macOS via the bundle's @loader_path/lib rpath.)
+        # via BUILD_RPATH.)
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${ORT_ROOT}/lib/onnxruntime.dll" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/onnxruntime.dll")
@@ -294,7 +311,9 @@ if(WMR_BUILD_AI_MIGAN)
                 "${CMAKE_SOURCE_DIR}/assets/migan_pipeline_v2.onnx"
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>/migan_pipeline_v2.onnx")
     endif()
+  endif()
 endif()
+
 
 # Tests
 option(WMR_BUILD_TESTS "Build test suite" ON)

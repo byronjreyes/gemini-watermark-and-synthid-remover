@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.10.0] - 2026-07-13
+
+### NotebookLM: native CoreML MI-GAN on macOS (~11× faster)
+
+On macOS, the MI-GAN inpainter now runs as a **native CoreML fp16 model on the
+Neural Engine** — **~28 ms/frame** (vs ~225 ms on ORT-CPU; ~11× faster), A/B-
+verified to match the ORT baseline within Δ1.9/255 on 12 NotebookLM scenes. This
+**replaces ONNX Runtime entirely on macOS** (CoreML is a system framework — no
+vendored lib; the 27 MB `.onnx` + ORT dylib are dropped from the mac packages,
+replaced by a 14 MB `.mlpackage`). The same `.mlpackage` is arch-neutral, so
+**Intel Macs now get MI-GAN too** (1.9.0 left them MI-GAN-free). Linux/Windows are
+unchanged (ORT-CPU).
+
+- **Why not the 1.9.0 CoreML path:** that finding ("CoreML is slower, 602 ms") was
+  ONNX Runtime's *CoreML execution provider* — its graph-partitioning overhead
+  (only 375/559 nodes reached CoreML). A native `coremltools` mlprogram puts the
+  whole graph in one MIL program and avoids the partition — the opposite result.
+- **Impl:** `src/core/migan_coreml_inpainter.mm` (Objective-C++, `WMR_AI_MIGAN_COREML`)
+  shares the `MiganInpainter` interface with the ORT `.cpp`; `video_processor.cpp`'s
+  dispatch is byte-identical. CMake splits `if(WMR_BUILD_AI_MIGAN)` into `if(APPLE)`
+  (CoreML + `.mm` + `.mlpackage`) / `else()` (ORT).
+- **macOS 14+ required** (the `.mlpackage` targets `minimum_deployment_target=macOS14`).
+- **Release shape:** mac arm64 + x86_64 both ship the `.mlpackage` (x86_64 is now a
+  tarball, was a bare binary); linux/windows unchanged.
+
 ## [1.9.0] - 2026-07-12
 
 ### NotebookLM: MI-GAN replaces FSR + LaMa as the default inpainter
