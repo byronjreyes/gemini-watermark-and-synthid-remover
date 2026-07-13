@@ -296,7 +296,7 @@ jobs:
           grep -q -- "--notebooklm-method" /tmp/vhelp.txt
           if [ "$HAS_CERT" = "true" ]; then
             codesign --verify --strict --verbose=2 "$ROOT/wmr.bin"
-            codesign -dv "$ROOT/wmr.bin" | grep -q "Authority=Developer ID Application"
+            codesign -dvvvv "$ROOT/wmr.bin" | grep -q "Authority=Developer ID Application"
             if [ -d "$ROOT/lib" ]; then
               find "$ROOT/lib" -type f -name '*.dylib' -exec codesign --verify --strict {} \;
             fi
@@ -321,7 +321,7 @@ jobs:
           grep -q -- "--notebooklm-method" /tmp/vhelp.txt
           if [ "$HAS_CERT" = "true" ]; then
             codesign --verify --strict --verbose=2 "$ROOT/wmr"
-            codesign -dv "$ROOT/wmr" | grep -q "Authority=Developer ID Application"
+            codesign -dvvvv "$ROOT/wmr" | grep -q "Authority=Developer ID Application"
           fi
 
       - uses: actions/upload-artifact@v4
