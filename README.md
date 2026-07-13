@@ -1,4 +1,4 @@
-# wmr — Watermark Remover
+# wmr: Watermark Remover
 
 [![GitHub release](https://img.shields.io/github/v/release/froggeric/gemini-watermark-and-synthid-remover?label=release)](https://github.com/froggeric/gemini-watermark-and-synthid-remover/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/froggeric/gemini-watermark-and-synthid-remover/release.yml?branch=main&label=CI)](https://github.com/froggeric/gemini-watermark-and-synthid-remover/actions/workflows/release.yml)
@@ -14,7 +14,7 @@ A fast C++20 command-line tool that removes **visible** and **invisible** waterm
 | Gemini sparkle logo | Gemini images | Reverse alpha-blend + AI denoise | ✅ Full |
 | Veo video watermark | Veo videos | Per-frame reverse alpha-blend | ✅ Full |
 | NotebookLM logo + wordmark | NotebookLM videos | Per-scene AI inpaint (MI-GAN) | ✅ Full |
-| SynthID (invisible) | Gemini images | Spectral subtraction | ⚠️ Partial — uniform images only |
+| SynthID (invisible) | Gemini images | Spectral subtraction | ⚠️ Partial: uniform images only |
 
 `detect` can also locate watermarks (including SynthID) without modifying the file.
 
@@ -22,7 +22,7 @@ A fast C++20 command-line tool that removes **visible** and **invisible** waterm
 
 ### 1. Download
 
-Grab a prebuilt binary from the [Releases page](https://github.com/froggeric/gemini-watermark-and-synthid-remover/releases) — no build step. Every package is self-contained (bundles the AI models and any runtime libraries it needs).
+Grab a prebuilt binary from the [Releases page](https://github.com/froggeric/gemini-watermark-and-synthid-remover/releases) (no build step). Every package is self-contained (bundles the AI models and any runtime libraries it needs).
 
 | Asset | Platform | Run |
 |-------|----------|-----|
@@ -135,15 +135,15 @@ wmr remove in.png --sigma 75 --strength 150 -o out.png   # tune
 | `--strength` | 0–300 % | 120 | Cleanup strength |
 | `--radius` | 1–25 | 10 | Gaussian/TELEA/NS radius |
 
-Source/dev builds default to AI-OFF (a lean fast build) — then only `--inpaint-strength` is available. Use `WMR_AI_DENOISE=1` to build with AI (see [Build from source](#build-from-source)).
+Source/dev builds default to AI-OFF (a lean fast build), exposing only `--inpaint-strength`. Use `WMR_AI_DENOISE=1` to build with AI (see [Build from source](#build-from-source)).
 
 ## How it works
 
-**Visible watermarks (Gemini, Veo)** are alpha-blended overlays: `watermarked = α·logo + (1−α)·original`. Since Gemini's logo and alpha map are known, removal inverts the blend exactly — `original = (watermarked − α·logo)/(1−α)` — then an optional denoise pass cleans compression artifacts. Two logo sizes: 48×48 (images ≤1024px) and 96×96 (larger), bottom-right corner. Video applies the same reverse-blend per frame, with shot-level detection and anchor-based fallback so no frame is skipped; audio is passed through untouched.
+**Visible watermarks (Gemini, Veo)** are alpha-blended overlays: `watermarked = α·logo + (1−α)·original`. Since Gemini's logo and alpha map are known, removal inverts the blend exactly: `original = (watermarked − α·logo)/(1−α)`. An optional denoise pass then cleans compression artifacts. Two logo sizes: 48×48 (images ≤1024px) and 96×96 (larger), bottom-right corner. Video applies the same reverse-blend per frame, with shot-level detection and anchor-based fallback so no frame is skipped; audio is passed through untouched.
 
-**NotebookLM** marks are semi-transparent and color-adaptive (not a reversible alpha overlay), so they're removed by **AI inpainting** rather than reverse-blending. [MI-GAN](https://github.com/Picsart-AI-Research/MI-GAN) (MIT, ICCV 2023) synthesizes the missing region; on Apple Silicon it runs on the Neural Engine (~28 ms/frame), elsewhere on ONNX Runtime CPU, falling back to Navier-Stokes. The mark is auto-detected per video via template matching (polarity-invariant, robust across scene cuts). On Apple Silicon every scene uses MI-GAN by default; elsewhere a complexity gate picks MI-GAN for textured backgrounds and NS for uniform ones. `--notebooklm-method` overrides.
+**NotebookLM** marks are semi-transparent and color-adaptive (not a reversible alpha overlay), so they're removed by **AI inpainting** rather than reverse-blending. [MI-GAN](https://github.com/Picsart-AI-Research/MI-GAN) (MIT, ICCV 2023) synthesizes the missing region; on Apple Silicon it runs on the Neural Engine (~28 ms/frame), elsewhere on ONNX Runtime CPU, falling back to Navier-Stokes. The mark is auto-detected per video via template matching (polarity-invariant, stable across scene cuts). On Apple Silicon every scene uses MI-GAN by default; elsewhere a complexity gate picks MI-GAN for textured backgrounds and NS for uniform ones. `--notebooklm-method` overrides.
 
-**SynthID** invisible watermarks live in the frequency domain. Removal estimates the carrier signal and subtracts it — either from a prebuilt spectral codebook (`--codebook`) or from the image's own noise residual (`--codebook-free`). *Limitation:* effective on uniform/dark images where the carrier dominates; on content-rich images the carrier is <0.1% of spectral energy, so reliable removal isn't currently possible.
+**SynthID** invisible watermarks live in the frequency domain. Removal estimates the carrier signal and subtracts it, either from a prebuilt spectral codebook (`--codebook`) or from the image's own noise residual (`--codebook-free`). *Limitation:* effective on uniform/dark images where the carrier dominates; on content-rich images the carrier is <0.1% of spectral energy, so reliable removal isn't currently possible.
 
 ## Performance
 
@@ -164,13 +164,13 @@ cmake -B build -S . -GNinja
 cmake --build build
 ```
 
-**macOS (Homebrew)** — `scripts/build.sh` self-heals stale caches and verifies formulas:
+**macOS (Homebrew):** `scripts/build.sh` self-heals stale caches and verifies formulas:
 ```bash
 brew install cmake ninja opencv fftw ffmpeg fmt spdlog cli11 catch2
 scripts/build.sh                 # release + tests
 ```
 
-With AI denoise + MI-GAN (matches the release binaries — macOS uses CoreML, no ORT):
+With AI denoise + MI-GAN (matches the release binaries; macOS uses CoreML, no ORT):
 ```bash
 brew install vulkan-volk vulkan-loader vulkan-headers molten-vk
 WMR_AI_MIGAN=1 WMR_AI_DENOISE=1 scripts/build.sh
@@ -180,7 +180,7 @@ Tests: `ctest --test-dir build --output-on-failure`.
 
 ## Architecture
 
-Single-pass C++20 tool — everything compiles into one `wmr` binary. Pipeline: **detect → remove → inpaint**, orchestrated by `WatermarkEngine`.
+Single-pass C++20 tool. Everything compiles into one `wmr` binary. Pipeline: **detect → remove → inpaint**, orchestrated by `WatermarkEngine`.
 
 ```
 src/
@@ -204,10 +204,10 @@ PRs welcome. Tests use Catch2; integration tests need the project root as CWD (t
 
 Built on research and code from:
 
-- [GeminiWatermarkTool](https://github.com/allenk/GeminiWatermarkTool) & [VeoWatermarkRemover](https://github.com/allenk/VeoWatermarkRemover) — reverse alpha-blend, NCC detection, inpainting, FDnCNN conversion (Allen Kuo)
-- [reverse-SynthID](https://github.com/aloshdenny/reverse-SynthID) — SynthID spectral analysis
-- [Picsart-AI-Research/MI-GAN](https://github.com/Picsart-AI-Research/MI-GAN) — MI-GAN inpainting (MIT, ICCV 2023)
-- [KAIR/FDnCNN](https://github.com/csjcai/KAIR) · [Tencent/ncnn](https://github.com/Tencent/ncnn) · [zeux/volk](https://github.com/zeux/volk) · [microsoft/onnxruntime](https://github.com/microsoft/onnxruntime) — AI inference stack
+- [GeminiWatermarkTool](https://github.com/allenk/GeminiWatermarkTool) & [VeoWatermarkRemover](https://github.com/allenk/VeoWatermarkRemover): reverse alpha-blend, NCC detection, inpainting, FDnCNN conversion (Allen Kuo)
+- [reverse-SynthID](https://github.com/aloshdenny/reverse-SynthID): SynthID spectral analysis
+- [Picsart-AI-Research/MI-GAN](https://github.com/Picsart-AI-Research/MI-GAN): MI-GAN inpainting (MIT, ICCV 2023)
+- [KAIR/FDnCNN](https://github.com/csjcai/KAIR) · [Tencent/ncnn](https://github.com/Tencent/ncnn) · [zeux/volk](https://github.com/zeux/volk) · [microsoft/onnxruntime](https://github.com/microsoft/onnxruntime): AI inference stack
 
 ## License
 

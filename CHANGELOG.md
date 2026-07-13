@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### NotebookLM: MI-GAN-everywhere on Apple Silicon + `--notebooklm-method` toggle
 
 On Apple Silicon (native arm64), MI-GAN now runs on **every** NotebookLM scene by
-default — the complexity gate (NS for uniform scenes) is skipped, since CoreML on
+default: the complexity gate (NS for uniform scenes) is skipped, since CoreML on
 the Neural Engine makes MI-GAN fast enough (~28 ms/frame) that the NS speed
 optimization is moot there. A/B-verified (26 uniform frames, MI-GAN-vs-NS mark-ROI
 delta 0.49/255 ≪ 3.0/255; no hallucinated texture on flat backgrounds). The
@@ -20,7 +20,7 @@ on a 5-min video.
   an *override*): `auto` = the platform default (MI-GAN-everywhere on Apple Silicon,
   complexity-gated elsewhere); `ns`/`migan` force one. NS remains the fallback when
   MI-GAN is unavailable (not built, or model failed to load).
-- **Unchanged elsewhere**: Apple Intel (x86_64, no Neural Engine — incl. a Rosetta-
+- **Unchanged elsewhere**: Apple Intel (x86_64, no Neural Engine, incl. a Rosetta-
   translated arm64 binary) + Linux/Windows (ORT, ~225 ms/frame) keep the complexity
   gate (NS for uniform, MI-GAN for intricate).
 - **Behavior change** (Apple Silicon only): `--notebooklm` default shifts from
@@ -28,7 +28,7 @@ on a 5-min video.
   old per-scene NS-on-uniform behavior.
 - The complexity-analysis pass (a full sequential decode + Sobel per scene) is now
   skipped when it won't be consulted (forced `ns`/`migan`, or `auto` on Apple
-  Silicon) — a minor speedup.
+  Silicon), a minor speedup.
 - Routing lives in the pure, arch-agnostic `resolve_inpaint_method(complexity,
   threshold, has_migan, requested, platform_default)` (the arch decision is in the
   caller, so `notebooklm_gates_test` stays arch-independent).
