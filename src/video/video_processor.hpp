@@ -75,6 +75,21 @@ private:
 
     WatermarkSize geometry_to_size(const WatermarkPosition& geo) const;
 
+    // Alpha map + default anchor (top-left + bbox) for a resolved geometry. The
+    // alpha is chosen through effective_alpha_size (the single >48/>68 gate); the
+    // position/region use the alpha's real dims (handles non-square Veo), falling
+    // back to the square logo_size when the asset is unavailable. The one helper
+    // every video path calls instead of re-spelling the pick + position math.
+    struct VideoAlphaAnchor {
+        const cv::Mat* alpha = nullptr;   // always assigned by select_video_alpha
+        cv::Point position{};             // always overwritten (def-init is defensive)
+        cv::Rect region{};
+    };
+    VideoAlphaAnchor select_video_alpha(const class WatermarkEngine& engine,
+                                        VideoProfile profile,
+                                        const WatermarkPosition& geo,
+                                        int width, int height) const;
+
     // Effective geometry honoring precedence:
     //   --rect > auto-detect > --variant > resolution guess.
     // Auto-detect samples frames via the reader, so it only runs for

@@ -99,6 +99,10 @@ corner + logo size so `--variant` is rarely needed. Two layers:
   corner window, calls the pure detector) and `resolve_effective_geometry`, the
   single chokepoint called once in `process()` before the scenes/std fork (geometry
   is constant across an export). `detect_in_shot` now takes `geo` as a parameter.
+  `select_video_alpha` is the single helper that turns a `geo` into an alpha Mat +
+  top-left + bbox; it routes the small/large pick through `effective_alpha_size`
+  (so the `>48/>68` gate truly has one source) and is called from `detect_in_shot`
+  and once in `process()` (its anchor reused by both `--force` branches).
 
   Templates: diamond `{48, 96}` (`get_v2_diamond_alpha_small/_large`), Veo text
   `{68x30, 99x43}`. The 36 diamond is still-only, never video. Corner window

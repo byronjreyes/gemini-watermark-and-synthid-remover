@@ -46,6 +46,41 @@ WatermarkSize VideoProcessor::geometry_to_size(const WatermarkPosition& geo) con
     return (geo.logo_size > 48) ? WatermarkSize::Large : WatermarkSize::Small;
 }
 
+// ---------------------------------------------------------------------------
+// Alpha map + default anchor for a resolved geometry. The single helper for the
+// pick + position math that detect_in_shot and process() both used to duplicate.
+// ---------------------------------------------------------------------------
+VideoProcessor::VideoAlphaAnchor VideoProcessor::select_video_alpha(
+    const WatermarkEngine& engine, VideoProfile profile,
+    const WatermarkPosition& geo, int width, int height) const
+{
+    VideoAlphaAnchor out;
+    // Route the small/large pick through effective_alpha_size so the >48/>68
+    // gate lives in exactly one place. The compared Sizes are that function's
+    // "large" return values (99x43 Veo / 96x96 Gemini); this is equivalent to
+    // >48/>68 for every logo_size the table/auto/rect path can emit
+    // (Gemini 44/48/96, Veo 68/99).
+    const cv::Size a = effective_alpha_size(profile, geo.logo_size);
+    if (profile == VideoProfile::VeoLegacy) {
+        out.alpha = (a == cv::Size(99, 43)) ? &engine.get_veo_text_alpha_large()
+                                            : &engine.get_veo_text_alpha_small();
+    } else {
+        out.alpha = (a == cv::Size(96, 96)) ? &engine.get_v2_diamond_alpha_large()
+                                            : &engine.get_v2_diamond_alpha_small();
+    }
+    if (out.alpha && !out.alpha->empty()) {
+        out.position = {width - geo.margin_right - out.alpha->cols,
+                        height - geo.margin_bottom - out.alpha->rows};
+        out.region = cv::Rect(out.position.x, out.position.y,
+                              out.alpha->cols, out.alpha->rows);
+    } else {
+        out.position = geo.get_position(width, height);
+        out.region = cv::Rect(out.position.x, out.position.y,
+                              geo.logo_size, geo.logo_size);
+    }
+    return out;
+}
+
 namespace {
 // Min |NCC| for a candidate geometry to count as a detection (same as NotebookLM).
 constexpr float kAutoGeometryMinConfidence = 0.45f;
@@ -205,31 +240,12 @@ VideoProcessor::ShotDetection VideoProcessor::detect_in_shot(
 
     // Geometry was resolved upstream by resolve_effective_geometry and passed in.
     auto wsize = geometry_to_size(geo);
-    auto default_pos = geo.get_position(reader.width(), reader.height());
-
-    // For Veo legacy, use reference alpha map (non-square: 68x30 or 99x43)
-    // For Gemini diamond, use V2 diamond alpha map (36x36 or 96x96)
-    const cv::Mat* video_alpha = nullptr;
-    if (config.profile == VideoProfile::VeoLegacy) {
-        video_alpha = (geo.logo_size > 68)
-                      ? &engine.get_veo_text_alpha_large()
-                      : &engine.get_veo_text_alpha_small();
-    } else {
-        video_alpha = (geo.logo_size > 48)
-                      ? &engine.get_v2_diamond_alpha_large()
-                      : &engine.get_v2_diamond_alpha_small();
-    }
-
-    if (video_alpha && !video_alpha->empty()) {
-        default_pos = {reader.width() - geo.margin_right - video_alpha->cols,
-                       reader.height() - geo.margin_bottom - video_alpha->rows};
-        result.region = cv::Rect(default_pos.x, default_pos.y, video_alpha->cols, video_alpha->rows);
-    } else {
-        result.region = cv::Rect(default_pos.x, default_pos.y, geo.logo_size, geo.logo_size);
-    }
-
-    result.position = default_pos;
-    result.size = wsize;
+    auto anchor = select_video_alpha(engine, config.profile, geo,
+                                     reader.width(), reader.height());
+    const cv::Mat* video_alpha = anchor.alpha;
+    result.position = anchor.position;
+    result.region   = anchor.region;
+    result.size     = wsize;
 
     // Determine sample range: use range params if specified, otherwise default coverage
     const int64_t sample_start = (range_start >= 0) ? range_start : 0;
@@ -477,17 +493,11 @@ VideoResult VideoProcessor::process(const std::string& input_path,
                  geo.margin_right, geo.margin_bottom, geo.logo_size,
                  resolved.source, resolved.score);
 
-    // Select alpha map based on profile and resolution
-    const cv::Mat* video_alpha = nullptr;
-    if (config.profile == VideoProfile::VeoLegacy) {
-        video_alpha = (geo.logo_size > 68)
-                      ? &engine.get_veo_text_alpha_large()
-                      : &engine.get_veo_text_alpha_small();
-    } else {
-        video_alpha = (geo.logo_size > 48)
-                      ? &engine.get_v2_diamond_alpha_large()
-                      : &engine.get_v2_diamond_alpha_small();
-    }
+    // Alpha + default anchor (top-left + bbox), chosen once via the single
+    // effective_alpha_size gate; reused by the --force branches below.
+    auto anchor = select_video_alpha(engine, config.profile, geo,
+                                     reader.width(), reader.height());
+    const cv::Mat* video_alpha = anchor.alpha;
 
     // Shot-level detection
     ShotDetection shot;
@@ -509,18 +519,10 @@ VideoResult VideoProcessor::process(const std::string& input_path,
 
         // Single full-video watermark detection
         if (config.force) {
-            cv::Point default_pos;
-            if (video_alpha && !video_alpha->empty()) {
-                default_pos = {static_cast<int>(reader.width()) - geo.margin_right - video_alpha->cols,
-                               static_cast<int>(reader.height()) - geo.margin_bottom - video_alpha->rows};
-                shot.region = cv::Rect(default_pos.x, default_pos.y, video_alpha->cols, video_alpha->rows);
-            } else {
-                default_pos = geo.get_position(reader.width(), reader.height());
-                shot.region = cv::Rect(default_pos.x, default_pos.y, geo.logo_size, geo.logo_size);
-            }
-            shot.found = false;
-            shot.position = default_pos;
-            shot.size = wsize;
+            shot.region     = anchor.region;
+            shot.position   = anchor.position;
+            shot.found      = false;
+            shot.size       = wsize;
             shot.confidence = 1.0f;
             spdlog::info("Force mode: using position ({},{}) size={}",
                          shot.position.x, shot.position.y, geo.logo_size);
@@ -640,18 +642,10 @@ VideoResult VideoProcessor::process(const std::string& input_path,
         // ---- Standard single-shot processing (original behavior) ----
 
         if (config.force) {
-            cv::Point default_pos;
-            if (video_alpha && !video_alpha->empty()) {
-                default_pos = {static_cast<int>(reader.width()) - geo.margin_right - video_alpha->cols,
-                               static_cast<int>(reader.height()) - geo.margin_bottom - video_alpha->rows};
-                shot.region = cv::Rect(default_pos.x, default_pos.y, video_alpha->cols, video_alpha->rows);
-            } else {
-                default_pos = geo.get_position(reader.width(), reader.height());
-                shot.region = cv::Rect(default_pos.x, default_pos.y, geo.logo_size, geo.logo_size);
-            }
-            shot.found = false;
-            shot.position = default_pos;
-            shot.size = wsize;
+            shot.region     = anchor.region;
+            shot.position   = anchor.position;
+            shot.found      = false;
+            shot.size       = wsize;
             shot.confidence = 1.0f;
             spdlog::info("Force mode: using position ({},{}) size={}",
                          shot.position.x, shot.position.y, geo.logo_size);
