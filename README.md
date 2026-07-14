@@ -47,6 +47,9 @@ wmr remove image.png -o clean.png
 # Gemini / Veo video (auto-detects the watermark position + size)
 wmr video video.mp4 -o clean.mp4
 
+# Veo legacy text watermark
+wmr video veo.mp4 --legacy -o clean.mp4
+
 # NotebookLM video (auto-detects the logo + wordmark)
 wmr video notebooklm.mp4 --notebooklm -o clean.mp4
 

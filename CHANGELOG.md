@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-07-14
+
 ### Video: automatic watermark geometry detection
 
 The Gemini/Veo video path now detects the watermark's corner position and logo
