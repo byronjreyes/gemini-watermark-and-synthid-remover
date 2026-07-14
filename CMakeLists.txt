@@ -26,6 +26,7 @@ set(SOURCES
     src/video/scene_detector.cpp
     src/video/notebooklm_detector.cpp
     src/video/notebooklm_gates.cpp
+    src/video/geometry_detector.cpp
 )
 
 # Executable

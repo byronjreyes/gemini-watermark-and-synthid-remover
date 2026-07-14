@@ -302,7 +302,7 @@ static int process_video(const CliOptions& opts) {
                                               : VideoProfile::GeminiDiamond;
     }
 
-    // Parse --rect x,y,w,h for NotebookLM manual override
+    // Parse --rect x,y,w,h manual override (any video profile)
     if (!opts.notebooklm_rect_str.empty()) {
         int x, y, w, h;
         char sep1, sep2, sep3;
@@ -310,7 +310,7 @@ static int process_video(const CliOptions& opts) {
         if (ss >> x >> sep1 >> y >> sep2 >> w >> sep3 >> h &&
             sep1 == ',' && sep2 == ',' && sep3 == ',' &&
             x >= 0 && y >= 0 && w > 0 && h > 0) {
-            config.notebooklm_rect = cv::Rect(x, y, w, h);
+            config.rect = cv::Rect(x, y, w, h);
         } else {
             spdlog::error("Invalid --rect format. Expected: x,y,w,h (e.g. --rect 1145,689,121,17)");
             return 1;
@@ -332,6 +332,7 @@ static int process_video(const CliOptions& opts) {
     config.inpaint_strength = opts.inpaint_strength;
     config.scenes = opts.scenes;
     config.scene_threshold = opts.scene_threshold;
+    config.no_auto_geometry = opts.no_auto_geometry;
     config.notebooklm_complexity_threshold = opts.notebooklm_complexity_threshold;
     config.notebooklm_method = opts.notebooklm_method;
     if (opts.notebooklm_method != "auto" && config.profile != VideoProfile::NotebookLM) {
@@ -513,7 +514,8 @@ int run_cli(int argc, char* argv[]) {
     video_cmd->add_flag("--notebooklm", opts.notebooklm_profile,
                          "Remove NotebookLM watermark (per-scene adaptive MI-GAN/NS inpaint)");
     video_cmd->add_option("--rect", opts.notebooklm_rect_str,
-                           "Manual watermark rect x,y,w,h (for --notebooklm auto-detect fallback)");
+                           "Manual watermark rect x,y,w,h (overrides auto-detect; "
+                           "Gemini/Veo and NotebookLM profiles)");
     video_cmd->add_option("--complexity-threshold", opts.notebooklm_complexity_threshold,
                            "Background-complexity floor above which MI-GAN is used "
                            "(below it, NS); default 15.0");
@@ -522,6 +524,8 @@ int run_cli(int argc, char* argv[]) {
         ->check(CLI::IsMember({"auto", "ns", "migan"}));
     video_cmd->add_option("--variant", opts.video_variant_str,
                            "Force geometry: 720p-1, 720p-2, 1080p");
+    video_cmd->add_flag("--no-auto-geometry", opts.no_auto_geometry,
+                           "Disable content-based geometry search; use the resolution guess");
     video_cmd->add_flag("-f,--force", opts.force, "Skip detection");
     video_cmd->add_option("--crf", opts.video_crf, "Encode CRF")
         ->check(CLI::Range(0, 51));

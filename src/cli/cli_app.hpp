@@ -42,6 +42,7 @@ struct CliOptions {
     bool still_legacy = false;         // still images: pin legacy V1 (Gemini pre-3.5)
     bool still_no_legacy = false;      // still images: pin current V2, disable V2→V1 fallback
     std::string video_variant_str;
+    bool no_auto_geometry = false;   // video: --no-auto-geometry (skip content-based geometry search)
     bool scenes = false;
     double scene_threshold = 0.30;
     int video_crf = 14;

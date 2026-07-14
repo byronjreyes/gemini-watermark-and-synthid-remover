@@ -82,6 +82,50 @@ Both operate in the frequency domain via `FftContext` (FFTW3 wrapper with plan c
 - Audio passthrough via fresh input context with timestamp rescaling
 - Audio streams created before MP4 header write (valid moov atom)
 
+### Video Watermark Geometry (auto-detect, default for `VideoVariant::Auto`)
+
+`VideoVariant::Auto` no longer guesses by resolution only; it content-detects the
+corner + logo size so `--variant` is rarely needed. Two layers:
+
+- **Pure detector** `src/video/geometry_detector.{hpp,cpp}` (OpenCV only, no
+  FFmpeg, so it is in the test link like `notebooklm_gates`): `detect_geometry_in_frames`
+  (a clone of `NotebookLMDetector::match_mark`, but matching the real alpha assets
+  at **native size** as separate templates, no scale ladder), `snap_geometry_to_known`
+  (snap to the `get_video_watermark_geometry` table by center L1, tol 40 px),
+  `rect_to_watermark_position`, `effective_alpha_size` (single source of truth for the
+  `logo_size > 48 / > 68` alpha gate), and `decide_auto_geometry` (the regression gate).
+- **FFmpeg-linked glue** in `VideoProcessor`: `auto_detect_geometry` (samples ~12
+  frames over the first 90%, builds CV_8U templates from the engine alphas + a
+  corner window, calls the pure detector) and `resolve_effective_geometry`, the
+  single chokepoint called once in `process()` before the scenes/std fork (geometry
+  is constant across an export). `detect_in_shot` now takes `geo` as a parameter.
+
+  Templates: diamond `{48, 96}` (`get_v2_diamond_alpha_small/_large`), Veo text
+  `{68x30, 99x43}`. The 36 diamond is still-only, never video. Corner window
+  `max(0,W-320) x max(0,H-320)` (Gemini) / `W-200 x H-120` (Veo). dtype is 8U/8U
+  (alpha `CV_32FC1 -> CV_8U` once, frames `cvtColor` grayscale), the `match_mark`
+  convention, NOT the `NccDetector` float-image path. Polarity-invariant: the
+  location follows the polarity (`loc_mn` when `|min|` wins, `loc_mx` when `|max|`
+  wins); the Jiwoks fork used `loc_mx` always and got the wrong corner.
+
+  **Snap is position-based, not size-based:** 720p-1 and 720p-2 both use the 48px
+  diamond at different margins (`P720_2.logo_size=44` is vestigial; it gates to
+  the 48 alpha), so size cannot tell them apart. `snap_geometry_to_known` only
+  considers variants whose `effective_alpha_size` equals the detected size, then
+  snaps by center distance. Their centers are ~75 px L1 apart (tol 40; nearer wins).
+
+- **Precedence** (`resolve_effective_geometry`): `--rect` > auto-detect > `--variant`
+  > resolution guess. `--no-auto-geometry` opts out; `--force` skips the search
+  (uses `--variant`/resolution). `--rect` was renamed from `notebooklm_rect` and
+  now serves Gemini/Veo too (still consumed by NotebookLM).
+- **Regression gate** (`decide_auto_geometry`, pure, unit-tested): a snapped
+  on-table detection is trusted; a raw off-table detection must score >=
+  `kAutoOverrideRawScore` (0.60, file-local in `video_processor.cpp`) to override
+  the resolution guess; otherwise keep today's behavior. So a busy-corner false
+  positive cannot regress a video that already works. `kAutoGeometryMinConfidence`
+  is 0.45 (same as NotebookLM). Log line `Geometry: margin=.. logo_size=.. (source=..,
+  score=..)` names the branch that ran.
+
 ### Scene Detection and Splitting (opt-in via `--scenes`)
 
 `SceneDetector` (video/scene_detector), combined BGR Bhattacharyya + MAD:

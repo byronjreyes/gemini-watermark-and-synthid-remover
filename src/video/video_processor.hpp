@@ -9,6 +9,7 @@
 #include "core/types.hpp"
 #include "video/video_writer.hpp"
 #include "video/notebooklm_detector.hpp"
+#include "video/geometry_detector.hpp"
 
 namespace wmr {
 
@@ -18,7 +19,8 @@ struct VideoWatermarkConfig {
     bool force = false;
     float inpaint_strength = 0.85f;
     bool scenes = false;
-    std::optional<cv::Rect> notebooklm_rect;  // --rect x,y,w,h override
+    std::optional<cv::Rect> rect;             // --rect x,y,w,h override (Gemini/Veo and NotebookLM)
+    bool no_auto_geometry = false;            // --no-auto-geometry: skip content-based geometry search
     double scene_threshold = 0.4;
     // NotebookLM adaptive dispatch: uniform scenes -> NS, intricate scenes ->
     // MI-GAN (when WMR_AI_MIGAN; else NS). On Apple Silicon the default is
@@ -63,6 +65,7 @@ private:
     ShotDetection detect_in_shot(class VideoReader& reader,
                                  class WatermarkEngine& engine,
                                  const VideoWatermarkConfig& config,
+                                 WatermarkPosition geo,
                                  int64_t range_start = -1,
                                  int64_t range_end = -1,
                                  int max_samples = kShotSampleCount);
@@ -71,6 +74,31 @@ private:
         const VideoWatermarkConfig& config, int width, int height) const;
 
     WatermarkSize geometry_to_size(const WatermarkPosition& geo) const;
+
+    // Effective geometry honoring precedence:
+    //   --rect > auto-detect > --variant > resolution guess.
+    // Auto-detect samples frames via the reader, so it only runs for
+    // VideoVariant::Auto when not --force / --no-auto-geometry. A snapped
+    // (on-table) detection is always trusted; a raw off-table detection must
+    // clear kAutoOverrideRawScore to override the resolution guess, so a
+    // false positive cannot regress a video that works today.
+    struct ResolvedGeometry {
+        WatermarkPosition geo;
+        std::string source;   // "rect" | "auto/snapped" | "auto/raw" | "force" | "variant" | "resolution"
+        float score = 0.0f;   // auto-detect confidence (0 otherwise)
+    };
+    ResolvedGeometry resolve_effective_geometry(
+        const VideoWatermarkConfig& config, int width, int height,
+        class VideoReader& reader, class WatermarkEngine& engine);
+
+    // Content-based geometry search: sample ~12 frames over the first 90%,
+    // multi-template match (real alpha assets at native size) in the
+    // bottom-right corner, then snap-to-known. Returns nullopt when fewer
+    // than ~2 frames sample or no candidate clears the min confidence.
+    // `score` receives the raw detection score on success.
+    std::optional<SnappedGeometry> auto_detect_geometry(
+        class VideoReader& reader, class WatermarkEngine& engine,
+        const VideoWatermarkConfig& config, float& score);
 
     // NotebookLM path: per-scene adaptive dispatch (presence + complexity gates)
     VideoResult process_notebooklm(const std::string& input_path,

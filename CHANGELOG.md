@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Video: automatic watermark geometry detection
+
+The Gemini/Veo video path now detects the watermark's corner position and logo
+size from the video content, so `--variant` is no longer required. The search
+samples frames, runs a polarity-invariant template match against the real alpha
+assets (48/96 px diamond, 68x30/99x43 Veo text) in the bottom-right corner, then
+snaps the result to the known geometry table. `Auto` (the default) uses this
+search and falls back to the resolution-based guess.
+
+- `--variant {720p-1|720p-2|1080p}` still forces a geometry and disables the
+  search; `--no-auto-geometry` opts out and uses the resolution guess.
+- `--rect x,y,w,h` is now available on the standard Gemini/Veo path too (it was
+  NotebookLM-only). Precedence: `--rect` > auto-detect > `--variant` > resolution.
+- A regression guard keeps a video that already works unchanged: a snapped
+  (on-table) detection is trusted, but a raw off-table detection must score at
+  least 0.60 before it overrides the resolution guess.
+- Detection is pure OpenCV logic in a new `geometry_detector` unit, unit-tested
+  without FFmpeg (it recovers 720p-1, 720p-2 via position snap, 1080p, and is
+  polarity-invariant).
+
 ## [1.11.0] - 2026-07-14
 
 ### macOS: Developer ID signing + notarization

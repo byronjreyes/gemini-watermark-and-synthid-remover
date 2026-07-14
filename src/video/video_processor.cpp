@@ -2,6 +2,7 @@
 #include "video/video_reader.hpp"
 #include "video/scene_detector.hpp"
 #include "video/notebooklm_gates.hpp"
+#include "video/geometry_detector.hpp"
 #include "core/watermark_engine.hpp"
 
 #include <algorithm>
@@ -12,6 +13,7 @@
 
 #include <spdlog/spdlog.h>
 #include <opencv2/photo.hpp>
+#include <opencv2/imgproc.hpp>
 #include <fmt/format.h>
 
 #if defined(WMR_AI_MIGAN)
@@ -44,6 +46,143 @@ WatermarkSize VideoProcessor::geometry_to_size(const WatermarkPosition& geo) con
     return (geo.logo_size > 48) ? WatermarkSize::Large : WatermarkSize::Small;
 }
 
+namespace {
+// Min |NCC| for a candidate geometry to count as a detection (same as NotebookLM).
+constexpr float kAutoGeometryMinConfidence = 0.45f;
+// A raw (off-table) detection must clear this to override the resolution guess,
+// so a busy-corner false positive cannot regress a video that already works.
+// Snapped (on-table) detections are trusted at kAutoGeometryMinConfidence.
+constexpr float kAutoOverrideRawScore = 0.60f;
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// Content-based geometry search: sample frames, multi-template match in the
+// bottom-right corner, snap to the known table. FFmpeg-linked (needs VideoReader).
+// ---------------------------------------------------------------------------
+std::optional<SnappedGeometry> VideoProcessor::auto_detect_geometry(
+    VideoReader& reader, WatermarkEngine& engine,
+    const VideoWatermarkConfig& config, float& score)
+{
+    score = 0.0f;
+    const int64_t total = reader.frame_count();
+    if (total < 2) return std::nullopt;
+
+    const int W = reader.width();
+    const int H = reader.height();
+    const int64_t coverage_end =
+        std::min(total, static_cast<int64_t>(static_cast<double>(total) * kShotCoverage));
+    const int sample_count = std::min(kShotSampleCount, static_cast<int>(coverage_end));
+    if (sample_count < 1) return std::nullopt;
+
+    // Sample grayscale frames over the first 90%.
+    std::vector<cv::Mat> frames;
+    frames.reserve(sample_count);
+    for (int i = 0; i < sample_count; ++i) {
+        const int64_t idx = (sample_count <= 1) ? 0 : static_cast<int64_t>(
+            static_cast<double>(i) / static_cast<double>(sample_count - 1) *
+            static_cast<double>(coverage_end - 1));
+        if (!reader.seek(idx)) continue;
+        cv::Mat frame;
+        if (!reader.next_frame(frame) || frame.empty()) continue;
+        cv::Mat gray;
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+        frames.push_back(gray);
+    }
+    if (frames.empty()) return std::nullopt;
+
+    // Real alpha assets at native size, converted to CV_8U for matching.
+    std::vector<cv::Mat> templates;
+    auto add_template = [&](const cv::Mat& alpha) {
+        if (alpha.empty()) return;
+        cv::Mat t;
+        alpha.convertTo(t, CV_8U, 255.0);
+        templates.push_back(t);
+    };
+    if (config.profile == VideoProfile::VeoLegacy) {
+        add_template(engine.get_veo_text_alpha_small());  // 68x30
+        add_template(engine.get_veo_text_alpha_large());  // 99x43
+    } else {
+        add_template(engine.get_v2_diamond_alpha_small());  // 48x48
+        add_template(engine.get_v2_diamond_alpha_large());  // 96x96
+    }
+    if (templates.empty()) return std::nullopt;
+
+    // Bottom-right corner window, sized for the largest mark (1080p: margin 192 + 96).
+    cv::Rect corner;
+    if (config.profile == VideoProfile::VeoLegacy) {
+        const int x0 = std::max(0, W - 200);
+        const int y0 = std::max(0, H - 120);
+        corner = cv::Rect(x0, y0, W - x0, H - y0);
+    } else {
+        const int x0 = std::max(0, W - 320);
+        const int y0 = std::max(0, H - 320);
+        corner = cv::Rect(x0, y0, W - x0, H - y0);
+    }
+
+    auto hit = detect_geometry_in_frames(frames, templates, corner, kAutoGeometryMinConfidence);
+    if (!hit) return std::nullopt;
+    score = hit->score;
+    return snap_geometry_to_known(hit->rect, W, H, config.profile);
+}
+
+// ---------------------------------------------------------------------------
+// Resolve the effective geometry per the precedence chain (see header).
+// ---------------------------------------------------------------------------
+VideoProcessor::ResolvedGeometry VideoProcessor::resolve_effective_geometry(
+    const VideoWatermarkConfig& config, int W, int H,
+    VideoReader& reader, WatermarkEngine& engine)
+{
+    ResolvedGeometry out;
+
+    const auto use_table_guess = [&]() {
+        out.geo = resolve_geometry(config, W, H);
+        out.source = config.force ? "force"
+                   : (config.variant != VideoVariant::Auto) ? "variant"
+                                                            : "resolution";
+        out.score = 0.0f;
+    };
+
+    // 1. Manual --rect override (any profile).
+    if (config.rect) {
+        out.geo = rect_to_watermark_position(*config.rect, W, H, config.profile);
+        out.source = "rect";
+        out.score = 0.0f;
+        return out;
+    }
+    // 2. --force / explicit --variant opt out of the content search.
+    if (config.force || config.variant != VideoVariant::Auto) {
+        use_table_guess();
+        return out;
+    }
+    // 3. Content-based auto-detect (the new default for Auto).
+    if (!config.no_auto_geometry) {
+        float score = 0.0f;
+        if (auto hit = auto_detect_geometry(reader, engine, config, score)) {
+            const auto verdict = decide_auto_geometry(hit->snapped, score, kAutoOverrideRawScore);
+            if (verdict == AutoGeometryVerdict::UseSnapped) {
+                out.geo = hit->geometry;
+                out.source = "auto/snapped";
+                out.score = score;
+                return out;
+            }
+            if (verdict == AutoGeometryVerdict::UseRaw) {
+                out.geo = hit->geometry;
+                out.source = "auto/raw";
+                out.score = score;
+                return out;
+            }
+            spdlog::warn("Auto-geometry: raw detection score {:.2f} < {:.2f}; "
+                         "keeping the resolution guess",
+                         score, kAutoOverrideRawScore);
+        } else {
+            spdlog::info("Auto-geometry: no confident match; using the resolution guess");
+        }
+    }
+    // 4. Resolution guess (today's behavior).
+    use_table_guess();
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // Shot-level detection: sample frames and establish watermark baseline
 // ---------------------------------------------------------------------------
@@ -51,6 +190,7 @@ VideoProcessor::ShotDetection VideoProcessor::detect_in_shot(
     VideoReader& reader,
     WatermarkEngine& engine,
     const VideoWatermarkConfig& config,
+    WatermarkPosition geo,
     int64_t range_start,
     int64_t range_end,
     int max_samples)
@@ -63,8 +203,7 @@ VideoProcessor::ShotDetection VideoProcessor::detect_in_shot(
         return result;
     }
 
-    // Get video-specific geometry
-    auto geo = resolve_geometry(config, reader.width(), reader.height());
+    // Geometry was resolved upstream by resolve_effective_geometry and passed in.
     auto wsize = geometry_to_size(geo);
     auto default_pos = geo.get_position(reader.width(), reader.height());
 
@@ -329,9 +468,14 @@ VideoResult VideoProcessor::process(const std::string& input_path,
 
     WatermarkEngine engine;
 
-    // Resolve video-specific geometry
-    auto geo = resolve_geometry(config, reader.width(), reader.height());
+    // Resolve video-specific geometry (--rect > auto-detect > --variant > resolution)
+    auto resolved = resolve_effective_geometry(
+        config, reader.width(), reader.height(), reader, engine);
+    auto geo = resolved.geo;
     auto wsize = geometry_to_size(geo);
+    spdlog::info("Geometry: margin={},{} logo_size={} (source={}, score={:.2f})",
+                 geo.margin_right, geo.margin_bottom, geo.logo_size,
+                 resolved.source, resolved.score);
 
     // Select alpha map based on profile and resolution
     const cv::Mat* video_alpha = nullptr;
@@ -381,7 +525,7 @@ VideoResult VideoProcessor::process(const std::string& input_path,
             spdlog::info("Force mode: using position ({},{}) size={}",
                          shot.position.x, shot.position.y, geo.logo_size);
         } else {
-            shot = detect_in_shot(reader, engine, config);
+            shot = detect_in_shot(reader, engine, config, geo);
         }
 
         reader.seek(0);
@@ -512,7 +656,7 @@ VideoResult VideoProcessor::process(const std::string& input_path,
             spdlog::info("Force mode: using position ({},{}) size={}",
                          shot.position.x, shot.position.y, geo.logo_size);
         } else {
-            shot = detect_in_shot(reader, engine, config);
+            shot = detect_in_shot(reader, engine, config, geo);
             reader.seek(0);
         }
 
@@ -704,7 +848,7 @@ VideoResult VideoProcessor::process_notebooklm(const std::string& input_path,
 
     // 1. Detect the watermark bbox (whole-video template match + snap to known).
     NotebookLMDetector detector;
-    auto det = detector.detect(input_path, config.notebooklm_rect);
+    auto det = detector.detect(input_path, config.rect);
     if (!det.found) {
         result.success = false;
         result.message = "NotebookLM watermark not detected (use --rect x,y,w,h to specify manually)";

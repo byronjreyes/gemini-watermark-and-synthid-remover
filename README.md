@@ -44,7 +44,7 @@ Grab a prebuilt binary from the [Releases page](https://github.com/froggeric/gem
 # Gemini image (auto-detects + removes the sparkle logo)
 wmr remove image.png -o clean.png
 
-# Gemini / Veo video
+# Gemini / Veo video (auto-detects the watermark position + size)
 wmr video video.mp4 -o clean.mp4
 
 # NotebookLM video (auto-detects the logo + wordmark)
@@ -101,10 +101,11 @@ Build a codebook from clean + watermarked reference pairs: `wmr build-codebook r
 | Flag | Description |
 |------|-------------|
 | `--notebooklm` | Target the NotebookLM logo + wordmark |
-| `--rect x,y,w,h` | Manual mark bbox (if `--notebooklm` auto-detect misses) |
+| `--rect x,y,w,h` | Manual watermark rect (overrides auto-detect; Gemini/Veo and NotebookLM) |
 | `--notebooklm-method {auto\|ns\|migan}` | Inpaint method override (`auto` = platform default: MI-GAN-everywhere on Apple Silicon, complexity-gated elsewhere) |
 | `--complexity-threshold` | NS↔MI-GAN gate (default 15; consulted only on non-arm64 `auto`) |
-| `--variant` | Force geometry: `720p-1`, `720p-2`, `1080p` |
+| `--variant` | Force geometry: `720p-1`, `720p-2`, `1080p` (otherwise it is auto-detected) |
+| `--no-auto-geometry` | Skip the content-based geometry search, fall back to the resolution guess |
 | `--scenes` | Split multi-scene videos into separate files |
 | `--scene-threshold` | Scene-cut sensitivity 0.0–1.0 (default 0.3) |
 | `--crf` / `--preset` / `--codec` | Encode settings (default CRF 14, `slow`, `libx264`) |
