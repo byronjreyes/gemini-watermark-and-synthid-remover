@@ -59,6 +59,9 @@ struct CliOptions {
     float denoise_sigma = 50.0f;        // --sigma 1-150
     float denoise_strength_pct = 120.0f; // --strength 0-300 (percent; /100 internally)
     int denoise_radius = 10;            // --radius 1-25
+
+    // Video denoise method default is off for performance.
+    std::string video_denoise_method = "off";
 };
 
 // Resolve the still-image profile variant from CLI flags.

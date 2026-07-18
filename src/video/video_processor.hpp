@@ -29,6 +29,8 @@ struct VideoWatermarkConfig {
     // default). NS is always the MI-GAN-unavailable fallback.
     double notebooklm_complexity_threshold = 15.0; // --complexity-threshold (intricate -> MI-GAN if score >= this)
     std::string notebooklm_method = "auto";        // --notebooklm-method {auto|ns|migan}
+    bool enable_denoise = false;
+    InpaintConfig denoise_config;
 };
 
 struct VideoResult {

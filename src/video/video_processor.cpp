@@ -697,7 +697,11 @@ VideoResult VideoProcessor::process(const std::string& input_path,
                 det.confidence = 1.0f;
                 det.region = shot.region;
                 det.size = shot.size;
-                engine.remove_watermark_alpha_only(frame, det, video_alpha);
+                if (config.enable_denoise) {
+                    engine.remove_watermark_detected(frame, det, config.denoise_config, video_alpha);
+                } else {
+                    engine.remove_watermark_alpha_only(frame, det, video_alpha);
+                }
                 writer.write_frame(frame);
                 ++result.frames_processed;
             } else {
@@ -724,7 +728,11 @@ VideoResult VideoProcessor::process(const std::string& input_path,
                     }
                 }
 
-                engine.remove_watermark_alpha_only(frame, det, video_alpha);
+                if (config.enable_denoise) {
+                    engine.remove_watermark_detected(frame, det, config.denoise_config, video_alpha);
+                } else {
+                    engine.remove_watermark_alpha_only(frame, det, video_alpha);
+                }
                 writer.write_frame(frame);
                 ++result.frames_processed;
             }

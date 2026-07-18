@@ -339,6 +339,22 @@ static int process_video(const CliOptions& opts) {
         spdlog::warn("--notebooklm-method ignored (only valid with --notebooklm)");
     }
 
+    if (opts.video_denoise_method != "off") {
+        config.enable_denoise = true;
+        config.denoise_config.strength = opts.denoise_strength_pct / 100.0f;
+        config.denoise_config.radius = opts.denoise_radius;
+        config.denoise_config.sigma = opts.denoise_sigma;
+        config.denoise_config.padding = 32;
+        if (opts.video_denoise_method == "soft") {
+            config.denoise_config.method = InpaintMethod::Gaussian;
+        }
+#ifdef WMR_AI_DENOISE
+        else if (opts.video_denoise_method == "ai") {
+            config.denoise_config.method = InpaintMethod::AiDenoise;
+        }
+#endif
+    }
+
     EncodeOptions encode;
     encode.codec = opts.video_codec;
     encode.crf = opts.video_crf;
@@ -539,6 +555,26 @@ int run_cli(int argc, char* argv[]) {
     video_cmd->add_option("--inpaint-strength", opts.inpaint_strength,
                            "Inpaint strength 0.0-1.0")
         ->check(CLI::Range(0.0f, 1.0f));
+
+#ifdef WMR_AI_DENOISE
+    video_cmd->add_option("--denoise", opts.video_denoise_method,
+                          "Cleanup method: off | ai | soft (default: off for video)")
+        ->check(CLI::IsMember({"off", "ai", "soft"}));
+#else
+    video_cmd->add_option("--denoise", opts.video_denoise_method,
+                          "Cleanup method: off | soft (default: off for video)")
+        ->check(CLI::IsMember({"off", "soft"}));
+#endif
+    video_cmd->add_option("--sigma", opts.denoise_sigma,
+                          "AI denoise noise level 1-150 (default 50)")
+        ->check(CLI::Range(1.0f, 150.0f));
+    video_cmd->add_option("--strength", opts.denoise_strength_pct,
+                          "Cleanup strength % 0-300 (default 120)")
+        ->check(CLI::Range(0.0f, 300.0f));
+    video_cmd->add_option("--radius", opts.denoise_radius,
+                          "Gaussian/Telea radius 1-25 (default 10)")
+        ->check(CLI::Range(1, 25));
+
     add_common(video_cmd);
 
     // Default subcommand: if no subcommand given, treat as positional for backward compat
